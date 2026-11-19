@@ -1,248 +1,472 @@
+
 package com.iam.humanizer
 
 import android.app.Activity
 import android.content.Intent
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.ViewGroup
-import android.widget.*
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import java.io.ByteArrayOutputStream
-import java.io.InputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.math.abs
 import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.pow
 
-class MainActivity : Activity() {
-    private var inputUri: Uri? = null
+class MainActivity : ComponentActivity() {
+
     private lateinit var status: TextView
-    private lateinit var clarity: SeekBar
-    private lateinit var warmth: SeekBar
-    private lateinit var music: SeekBar
-    private lateinit var outputName: EditText
+    private lateinit var selectButton: Button
+    private lateinit var progress: ProgressBar
+
+    private var processedAudio: ByteArray? = null
+    private var outputSampleRate = 44100
+    private var outputChannels = 2
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private val audioPicker =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                processAudio(uri)
+            }
+        }
+
+    private val savePicker =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("audio/wav")) { uri ->
+            if (uri != null) {
+                saveWav(uri)
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = android.graphics.Color.rgb(10, 16, 28)
-        window.navigationBarColor = android.graphics.Color.rgb(10, 16, 28)
+        createInterface()
+    }
 
-        val root = LinearLayout(this).apply {
+    private fun createInterface() {
+        val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(24, 28, 24, 24)
-            setBackgroundColor(android.graphics.Color.rgb(10, 16, 28))
+            gravity = Gravity.CENTER
+            setPadding(28, 35, 28, 35)
+            setBackgroundColor(android.graphics.Color.rgb(12, 16, 25))
         }
-        val scroll = ScrollView(this)
-        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        scroll.addView(content)
-        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        content.addView(label("I.A.M HUMANIZER", 27f, true))
-        content.addView(label("Mejora de audio sin IA · procesamiento local", 14f, false))
-        content.addView(space(18))
-        val pick = button("1. SELECCIONAR CANCIÓN WAV")
-        content.addView(pick)
-        pick.setOnClickListener {
-            val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type = "audio/wav"
-            }
-            startActivityForResult(i, 10)
+        val title = TextView(this).apply {
+            text = "I.A.M HUMANIZER"
+            textSize = 28f
+            gravity = Gravity.CENTER
+            setTextColor(android.graphics.Color.rgb(70, 230, 190))
         }
-        content.addView(space(14))
-        content.addView(label("PRESENCIA Y CLARIDAD (global)", 15f, true))
-        clarity = slider(content, 0, 100, 35, "Más presencia")
-        content.addView(label("CALIDEZ (global)", 15f, true))
-        warmth = slider(content, 0, 100, 25, "Más cuerpo")
-        content.addView(label("REDUCCIÓN DE MÚSICA (aproximada)", 15f, true))
-        music = slider(content, 0, 60, 12, "Menos medios")
-        content.addView(label("Nombre del archivo de salida", 14f, true))
-        outputName = EditText(this).apply {
-            setText("cancion_IAM_Humanizada")
+
+        val subtitle = TextView(this).apply {
+            text = "Procesamiento de audio"
+            textSize = 16f
+            gravity = Gravity.CENTER
             setTextColor(android.graphics.Color.WHITE)
-            setHintTextColor(0xff9aa7ba.toInt())
-            setSingleLine(true)
-        }
-        content.addView(outputName)
-        content.addView(space(12))
-        val export = button("2. PROCESAR Y GUARDAR WAV")
-        content.addView(export)
-        export.setOnClickListener { processAndSave() }
-        content.addView(space(14))
-        status = label("Estado: selecciona un archivo WAV PCM de 16 bits.", 14f, false)
-        content.addView(status)
-        content.addView(space(16))
-        content.addView(label("IMPORTANTE", 15f, true))
-        content.addView(label(
-            "Esta versión funciona sin Internet y sin IA. No separa la voz de los instrumentos: al recibir una canción ya mezclada, los controles afectan el sonido general. La reducción de música es una aproximación por frecuencias, no un control independiente de cada instrumento. Entrada y salida: WAV PCM de 16 bits.",
-            13f, false
-        ))
-        setContentView(root)
-    }
-
-    private fun label(text: String, size: Float, bold: Boolean): TextView =
-        TextView(this).apply {
-            this.text = text
-            textSize = size
-            setTextColor(if (bold) 0xff65e6c2.toInt() else 0xffd6deea.toInt())
-            if (bold) setTypeface(null, android.graphics.Typeface.BOLD)
-            setPadding(0, 8, 0, 8)
         }
 
-    private fun button(text: String) = Button(this).apply {
-        this.text = text
-        setTextColor(android.graphics.Color.WHITE)
-        setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xff147d75.toInt()))
-    }
-
-    private fun space(h: Int) = TextView(this).apply {
-        layoutParams = LinearLayout.LayoutParams(1, h)
-    }
-
-    private fun slider(parent: LinearLayout, minV: Int, maxV: Int, initial: Int, title: String): SeekBar {
-        val s = SeekBar(this).apply {
-            max = maxV - minV
-            progress = initial - minV
-            contentDescription = title
+        status = TextView(this).apply {
+            text = "Selecciona una canción para comenzar."
+            textSize = 15f
+            gravity = Gravity.CENTER
+            setTextColor(android.graphics.Color.LTGRAY)
+            setPadding(8, 30, 8, 30)
         }
-        parent.addView(s, ViewGroup.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
-        return s
-    }
 
-    @Deprecated("Deprecated in Android but retained for broad compatibility")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == 10 && resultCode == Activity.RESULT_OK) {
-            inputUri = data?.data
-            status.text = if (inputUri != null) "Archivo seleccionado. Listo para procesar." else "No se seleccionó archivo."
-        } else if (requestCode == 11 && resultCode == Activity.RESULT_OK) {
-            val uri = data?.data
-            if (uri != null) {
-                try {
-                    val result = pendingOutput
-                    if (result != null) contentResolver.openOutputStream(uri)?.use { it.write(result) }
-                    status.text = "¡Listo! WAV humanizado guardado."
-                    Toast.makeText(this, "Archivo guardado", Toast.LENGTH_LONG).show()
-                } catch (e: Exception) {
-                    status.text = "Error al guardar: ${e.message}"
+        progress = ProgressBar(this).apply {
+            visibility = ProgressBar.GONE
+        }
+
+        selectButton = Button(this).apply {
+            text = "SELECCIONAR CANCIÓN"
+            setOnClickListener {
+                openAudioPicker()
+            }
+        }
+
+        val saveButton = Button(this).apply {
+            text = "EXPORTAR WAV"
+            setOnClickListener {
+                if (processedAudio == null) {
+                    message("Primero selecciona y procesa una canción.")
+                } else {
+                    savePicker.launch("IAM_HUMANIZER.wav")
                 }
             }
         }
+
+        layout.addView(title, match())
+        layout.addView(subtitle, match())
+        layout.addView(status, match())
+        layout.addView(progress, match())
+        layout.addView(selectButton, match())
+        layout.addView(saveButton, match())
+
+        setContentView(layout)
     }
 
-    private var pendingOutput: ByteArray? = null
-
-    private fun processAndSave() {
-        val uri = inputUri
-        if (uri == null) {
-            status.text = "Primero selecciona una canción WAV."
-            return
+    private fun match(): LinearLayout.LayoutParams {
+        return LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            bottomMargin = 18
         }
-        status.text = "Procesando en el teléfono..."
+    }
+
+    private fun openAudioPicker() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/*"
+            putExtra(
+                Intent.EXTRA_MIME_TYPES,
+                arrayOf(
+                    "audio/mpeg",
+                    "audio/mp3",
+                    "audio/wav",
+                    "audio/x-wav",
+                    "audio/mp4",
+                    "audio/aac",
+                    "audio/flac",
+                    "audio/ogg",
+                    "audio/opus",
+                    "audio/3gpp",
+                    "audio/amr",
+                    "audio/x-m4a"
+                )
+            )
+        }
+
+        audioPicker.launch(arrayOf("audio/*"))
+    }
+
+    private fun processAudio(uri: Uri) {
+        selectButton.isEnabled = false
+        progress.visibility = ProgressBar.VISIBLE
+        status.text = "Leyendo y decodificando audio..."
+
+        Thread {
+            try {
+                val decoded = decodeAudio(uri)
+
+                if (decoded.isEmpty()) {
+                    throw Exception("No se pudo obtener audio.")
+                }
+
+                val normalized = normalizeAudio(decoded)
+
+                processedAudio = pcmToWav(
+                    normalized,
+                    outputSampleRate,
+                    outputChannels
+                )
+
+                mainHandler.post {
+                    progress.visibility = ProgressBar.GONE
+                    selectButton.isEnabled = true
+                    status.text =
+                        "Audio procesado correctamente.\nFormato de salida: WAV PCM 16-bit\nAhora puedes exportarlo."
+                    message("Procesamiento terminado.")
+                }
+
+            } catch (e: Exception) {
+                mainHandler.post {
+                    progress.visibility = ProgressBar.GONE
+                    selectButton.isEnabled = true
+                    status.text = "No se pudo procesar el archivo."
+                    message(e.message ?: "Error al procesar audio.")
+                }
+            }
+        }.start()
+    }
+
+    private fun decodeAudio(uri: Uri): ShortArray {
+        val extractor = MediaExtractor()
+        var codec: MediaCodec? = null
+
         try {
-            val bytes = contentResolver.openInputStream(uri)!!.use { it.readBytes() }
-            val wav = WavPcm16.read(bytes)
-            val clarityAmount = clarity.progress / 100.0
-            val warmthAmount = warmth.progress / 100.0
-            val musicAmount = music.progress / 100.0
-            val processed = Dsp.process(wav.samples, wav.channels, wav.sampleRate, clarityAmount, warmthAmount, musicAmount)
-            pendingOutput = WavPcm16.write(processed, wav.channels, wav.sampleRate)
-            val name = outputName.text.toString().trim().ifBlank { "cancion_IAM_Humanizada" }
-                .replace(Regex("[^A-Za-z0-9_-]"), "_")
-            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type = "audio/wav"
-                putExtra(Intent.EXTRA_TITLE, "$name.wav")
-            }
-            startActivityForResult(intent, 11)
-        } catch (e: Exception) {
-            status.text = "No se pudo procesar. Usa WAV PCM de 16 bits. Detalle: ${e.message}"
-        }
-    }
-}
+            extractor.setDataSource(this, uri, null)
 
-private data class WavData(val samples: ShortArray, val channels: Int, val sampleRate: Int)
+            var audioTrack = -1
+            var format: MediaFormat? = null
 
-private object WavPcm16 {
-    fun read(b: ByteArray): WavData {
-        require(b.size > 44 && String(b, 0, 4) == "RIFF" && String(b, 8, 4) == "WAVE") { "El archivo no parece WAV." }
-        var pos = 12
-        var channels = 0
-        var rate = 0
-        var bits = 0
-        var format = 0
-        var dataOffset = -1
-        var dataSize = 0
-        while (pos + 8 <= b.size) {
-            val id = String(b, pos, 4)
-            val size = leInt(b, pos + 4).coerceAtLeast(0)
-            val start = pos + 8
-            if (start + size > b.size) break
-            when (id) {
-                "fmt " -> {
-                    format = leShort(b, start)
-                    channels = leShort(b, start + 2)
-                    rate = leInt(b, start + 4)
-                    bits = leShort(b, start + 14)
+            for (i in 0 until extractor.trackCount) {
+                val candidate = extractor.getTrackFormat(i)
+                val mime = candidate.getString(MediaFormat.KEY_MIME) ?: ""
+
+                if (mime.startsWith("audio/")) {
+                    audioTrack = i
+                    format = candidate
+                    break
                 }
-                "data" -> { dataOffset = start; dataSize = size }
             }
-            pos = start + size + (size and 1)
+
+            if (audioTrack < 0 || format == null) {
+                throw Exception("El archivo no contiene una pista de audio.")
+            }
+
+            extractor.selectTrack(audioTrack)
+
+            val mime = format.getString(MediaFormat.KEY_MIME)
+                ?: throw Exception("Formato de audio desconocido.")
+
+            codec = MediaCodec.createDecoderByType(mime)
+            codec.configure(format, null, null, 0)
+            codec.start()
+
+            val output = ByteArrayOutputStream()
+            val info = MediaCodec.BufferInfo()
+
+            var inputFinished = false
+            var outputFinished = false
+            var sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            var channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            var pcmEncoding = 2
+
+            while (!outputFinished) {
+
+                if (!inputFinished) {
+                    val inputIndex = codec.dequeueInputBuffer(10000)
+
+                    if (inputIndex >= 0) {
+                        val inputBuffer = codec.getInputBuffer(inputIndex)
+                            ?: throw Exception("Error de lectura del audio.")
+
+                        val sampleSize = extractor.readSampleData(inputBuffer, 0)
+
+                        if (sampleSize < 0) {
+                            codec.queueInputBuffer(
+                                inputIndex,
+                                0,
+                                0,
+                                0,
+                                MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                            )
+                            inputFinished = true
+                        } else {
+                            codec.queueInputBuffer(
+                                inputIndex,
+                                0,
+                                sampleSize,
+                                extractor.sampleTime,
+                                0
+                            )
+                            extractor.advance()
+                        }
+                    }
+                }
+
+                val outputIndex = codec.dequeueOutputBuffer(info, 10000)
+
+                when {
+                    outputIndex >= 0 -> {
+                        val buffer = codec.getOutputBuffer(outputIndex)
+
+                        if (buffer != null && info.size > 0) {
+                            val outputFormat = codec.outputFormat
+
+                            if (outputFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                                sampleRate = outputFormat.getInteger(
+                                    MediaFormat.KEY_SAMPLE_RATE
+                                )
+                            }
+
+                            if (outputFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+                                channels = outputFormat.getInteger(
+                                    MediaFormat.KEY_CHANNEL_COUNT
+                                )
+                            }
+
+                            if (outputFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
+                                pcmEncoding = outputFormat.getInteger(
+                                    MediaFormat.KEY_PCM_ENCODING
+                                )
+                            }
+
+                            buffer.position(info.offset)
+                            buffer.limit(info.offset + info.size)
+
+                            val chunk = ByteArray(info.size)
+                            buffer.get(chunk)
+                            output.write(chunk)
+
+                            if (output.size() > 100 * 1024 * 1024) {
+                                throw Exception(
+                                    "El audio es demasiado grande para la memoria disponible."
+                                )
+                            }
+                        }
+
+                        val endOfStream =
+                            info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+
+                        codec.releaseOutputBuffer(outputIndex, false)
+
+                        if (endOfStream) {
+                            outputFinished = true
+                        }
+                    }
+
+                    outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        val newFormat = codec.outputFormat
+
+                        sampleRate = newFormat.getInteger(
+                            MediaFormat.KEY_SAMPLE_RATE
+                        )
+                        channels = newFormat.getInteger(
+                            MediaFormat.KEY_CHANNEL_COUNT
+                        )
+
+                        if (newFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
+                            pcmEncoding = newFormat.getInteger(
+                                MediaFormat.KEY_PCM_ENCODING
+                            )
+                        }
+                    }
+                }
+            }
+
+            outputSampleRate = sampleRate
+            outputChannels = channels
+
+            if (channels !in 1..2) {
+                throw Exception("Este prototipo admite audio mono o estéreo.")
+            }
+
+            return convertToPcm16(output.toByteArray(), pcmEncoding)
+
+        } finally {
+            try {
+                codec?.stop()
+            } catch (_: Exception) {
+            }
+
+            try {
+                codec?.release()
+            } catch (_: Exception) {
+            }
+
+            extractor.release()
         }
-        require(format == 1 && bits == 16 && (channels == 1 || channels == 2) && rate > 0 && dataOffset >= 0) {
-            "Formato no compatible: se requiere PCM 16-bit mono o estéreo."
-        }
-        val count = dataSize / 2
-        val samples = ShortArray(count) { i -> leShort(b, dataOffset + i * 2).toShort() }
-        return WavData(samples, channels, rate)
     }
 
-    fun write(samples: ShortArray, channels: Int, rate: Int): ByteArray {
+    private fun convertToPcm16(data: ByteArray, encoding: Int): ShortArray {
+        val buffer = ByteBuffer.wrap(data).order(ByteOrder.nativeOrder())
+
+        return when (encoding) {
+            2 -> {
+                val count = data.size / 2
+                ShortArray(count) { buffer.short }
+            }
+
+            4 -> {
+                val count = data.size / 4
+                ShortArray(count) {
+                    val sample = buffer.float.coerceIn(-1f, 1f)
+                    (sample * 32767f).toInt().toShort()
+                }
+            }
+
+            3 -> {
+                ShortArray(data.size) {
+                    ((data[it].toInt() and 0xFF) - 128).toShort().let {
+                        (it.toInt() shl 8).toShort()
+                    }
+                }
+            }
+
+            else -> throw Exception(
+                "El teléfono entregó un formato PCM no compatible."
+            )
+        }
+    }
+
+    private fun normalizeAudio(input: ShortArray): ShortArray {
+        if (input.isEmpty()) return input
+
+        var peak = 0
+
+        for (sample in input) {
+            peak = max(peak, abs(sample.toInt()))
+        }
+
+        if (peak == 0) return input
+
+        val target = 29204.0
+        val gain = (target / peak).coerceAtMost(2.0)
+
+        return ShortArray(input.size) { index ->
+            (input[index].toDouble() * gain)
+                .toInt()
+                .coerceIn(-32768, 32767)
+                .toShort()
+        }
+    }
+
+    private fun pcmToWav(
+        samples: ShortArray,
+        sampleRate: Int,
+        channels: Int
+    ): ByteArray {
+
         val dataSize = samples.size * 2
-        val out = ByteArrayOutputStream(44 + dataSize)
-        fun put(s: String) = out.write(s.toByteArray(Charsets.US_ASCII))
-        fun i(v: Int) { repeat(4) { out.write((v ushr (8 * it)) and 255) } }
-        fun sh(v: Int) { out.write(v and 255); out.write((v ushr 8) and 255) }
-        put("RIFF"); i(36 + dataSize); put("WAVE"); put("fmt "); i(16)
-        sh(1); sh(channels); i(rate); i(rate * channels * 2); sh(channels * 2); sh(16)
-        put("data"); i(dataSize)
-        samples.forEach { sh(it.toInt() and 0xffff) }
-        return out.toByteArray()
+        val totalSize = 44 + dataSize
+
+        val buffer = ByteBuffer.allocate(totalSize)
+            .order(ByteOrder.LITTLE_ENDIAN)
+
+        buffer.put("RIFF".toByteArray(Charsets.US_ASCII))
+        buffer.putInt(totalSize - 8)
+        buffer.put("WAVE".toByteArray(Charsets.US_ASCII))
+        buffer.put("fmt ".toByteArray(Charsets.US_ASCII))
+        buffer.putInt(16)
+        buffer.putShort(1)
+        buffer.putShort(channels.toShort())
+        buffer.putInt(sampleRate)
+        buffer.putInt(sampleRate * channels * 2)
+        buffer.putShort((channels * 2).toShort())
+        buffer.putShort(16)
+        buffer.put("data".toByteArray(Charsets.US_ASCII))
+        buffer.putInt(dataSize)
+
+        for (sample in samples) {
+            buffer.putShort(sample)
+        }
+
+        return buffer.array()
     }
 
-    private fun leInt(b: ByteArray, p: Int) =
-        (b[p].toInt() and 255) or ((b[p+1].toInt() and 255) shl 8) or
-        ((b[p+2].toInt() and 255) shl 16) or ((b[p+3].toInt() and 255) shl 24)
-    private fun leShort(b: ByteArray, p: Int) = (b[p].toInt() and 255) or ((b[p+1].toInt() and 255) shl 8)
-}
+    private fun saveWav(uri: Uri) {
+        val audio = processedAudio ?: return
 
-private object Dsp {
-    fun process(input: ShortArray, channels: Int, sampleRate: Int, clarity: Double, warmth: Double, music: Double): ShortArray {
-        val out = ShortArray(input.size)
-        val n = channels
-        val lowAlpha = (1.0 - kotlin.math.exp(-2.0 * Math.PI * 180.0 / sampleRate)).coerceIn(0.001, 0.99)
-        val highAlpha = (1.0 - kotlin.math.exp(-2.0 * Math.PI * 3200.0 / sampleRate)).coerceIn(0.001, 0.99)
-        val low = DoubleArray(n)
-        val high = DoubleArray(n)
-        val previous = DoubleArray(n)
-        for (i in input.indices) {
-            val c = i % n
-            val x = input[i].toDouble() / 32768.0
-            low[c] += lowAlpha * (x - low[c])
-            high[c] += highAlpha * (x - high[c])
-            val highPart = x - high[c]
-            val midPart = x - low[c] - highPart
-            // Presence/clarity and warmth are broad tonal adjustments, not vocal extraction.
-            var y = x + clarity * 0.28 * highPart + warmth * 0.18 * low[c] - music * 0.22 * midPart
-            // Gentle compression and peak protection.
-            val threshold = 0.72
-            val a = abs(y)
-            if (a > threshold) y = (if (y < 0) -1 else 1) * (threshold + (a - threshold) * 0.35)
-            y *= 0.94
-            y = y.coerceIn(-0.98, 0.98)
-            out[i] = (y * 32767.0).toInt().toShort()
-            previous[c] = y
+        try {
+            contentResolver.openOutputStream(uri)?.use { stream ->
+                stream.write(audio)
+                stream.flush()
+            } ?: throw Exception("No se pudo guardar el archivo.")
+
+            status.text = "¡Canción exportada correctamente!"
+            message("WAV guardado correctamente.")
+
+        } catch (e: Exception) {
+            message(e.message ?: "Error al guardar.")
         }
-        return out
+    }
+
+    private fun message(text: String) {
+        Toast.makeText(this, text, Toast.LENGTH_LONG).show()
     }
 }
