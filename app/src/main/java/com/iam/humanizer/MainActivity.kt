@@ -3,10 +3,10 @@ package com.iam.humanizer
 
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.media.AudioFormat
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
-import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -27,13 +27,22 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var status: TextView
     private lateinit var selectButton: Button
+    private lateinit var playButton: Button
     private lateinit var exportButton: Button
     private lateinit var progress: ProgressBar
-    private lateinit var presetSpinner: Spinner
     private lateinit var bassSwitch: Switch
     private lateinit var reverbSwitch: Switch
     private lateinit var stereoSwitch: Switch
+    private lateinit var presetSpinner: Spinner
     private lateinit var faders: List<VerticalFader>
+
+    private var audio: ShortArray? = null
+    private var rate = 44100
+    private var channels = 2
+    private var engine: LiveAudioEngine? = null
+    private val handler = Handler(Looper.getMainLooper())
+
+    private var pendingWav: ByteArray? = null
 
     private val frequencies = listOf(
         "31", "62", "125", "250", "500",
@@ -42,6 +51,7 @@ class MainActivity : ComponentActivity() {
 
     private val presets = linkedMapOf(
         "Personalizado" to floatArrayOf(0f,0f,0f,0f,0f,0f,0f,0f,0f,0f),
+        "VOZ CLARA" to floatArrayOf(-3f,-2f,-1f,0f,1f,2f,3f,3f,2f,1f),
         "Acústica" to floatArrayOf(2f,2f,1f,0f,1f,2f,2f,1f,1f,1f),
         "Pop" to floatArrayOf(-1f,0f,1f,2f,1f,0f,1f,2f,2f,1f),
         "Rock" to floatArrayOf(3f,2f,-1f,-2f,0f,1f,2f,3f,3f,2f),
@@ -51,31 +61,31 @@ class MainActivity : ComponentActivity() {
         "Clásica" to floatArrayOf(2f,1f,0f,0f,0f,1f,1f,2f,2f,2f)
     )
 
-    private var processedAudio: ByteArray? = null
-    private var outputSampleRate = 44100
-    private var outputChannels = 2
-    private var player: MediaPlayer? = null
-    private val mainHandler = Handler(Looper.getMainLooper())
+    private data class Decoded(
+        val samples: ShortArray,
+        val sampleRate: Int,
+        val channelCount: Int
+    )
 
     private val audioPicker =
-        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri != null) processAudio(uri)
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) {
+            if (it != null) loadAudio(it)
         }
 
     private val savePicker =
-        registerForActivityResult(ActivityResultContracts.CreateDocument("audio/wav")) { uri ->
-            if (uri != null) saveWav(uri)
+        registerForActivityResult(ActivityResultContracts.CreateDocument("audio/wav")) {
+            if (it != null) saveWav(it)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        createInterface()
+        buildInterface()
     }
 
-    private fun createInterface() {
+    private fun buildInterface() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(18,24,18,24)
+            setPadding(16,20,16,20)
             setBackgroundColor(0xFF101116.toInt())
         }
 
@@ -85,76 +95,75 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.CENTER_HORIZONTAL
         }
 
-        fun label(text: String, size: Float = 15f): TextView {
-            return TextView(this).apply {
+        fun label(text: String, size: Float = 15f) =
+            TextView(this).apply {
                 this.text = text
                 textSize = size
                 gravity = Gravity.CENTER
-                setTextColor(0xFFF3F3F3.toInt())
-                setPadding(4,10,4,10)
+                setTextColor(0xFFFFFFFF.toInt())
+                setPadding(4,9,4,9)
             }
-        }
 
         content.addView(label("I.A.M HUMANIZER",27f))
-        content.addView(label("ESTUDIO DE AUDIO · ECUALIZADOR PRO",13f))
+        content.addView(label("ECUALIZADOR DE AUDIO EN VIVO",14f))
 
-        status = label("Selecciona una canción para comenzar.")
+        status = label("Selecciona una canción.")
         content.addView(status)
 
-        progress = ProgressBar(this).apply { visibility = View.GONE }
+        progress = ProgressBar(this).apply {
+            visibility = View.GONE
+        }
         content.addView(progress)
 
         selectButton = Button(this).apply {
             text = "SELECCIONAR CANCIÓN"
-            setOnClickListener { audioPicker.launch(arrayOf("audio/*")) }
+            setOnClickListener {
+                audioPicker.launch(arrayOf("audio/*"))
+            }
         }
-        content.addView(selectButton,matchParams())
+        content.addView(selectButton, params())
 
         content.addView(label("ECUALIZADOR DE 10 BANDAS",18f))
 
         presetSpinner = Spinner(this)
-        val presetAdapter = ArrayAdapter(
+        val adapter = ArrayAdapter(
             this,
             android.R.layout.simple_spinner_item,
             presets.keys.toList()
         )
-        presetAdapter.setDropDownViewResource(
+        adapter.setDropDownViewResource(
             android.R.layout.simple_spinner_dropdown_item
         )
-        presetSpinner.adapter = presetAdapter
-        content.addView(presetSpinner,matchParams())
+        presetSpinner.adapter = adapter
+        content.addView(presetSpinner, params())
 
-        val sliderRow = LinearLayout(this).apply {
+        val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
 
-        val sliders = mutableListOf<VerticalFader>()
+        val list = mutableListOf<VerticalFader>()
 
-        for (frequency in frequencies) {
+        frequencies.forEach { frequency ->
             val column = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                setPadding(2,4,2,4)
             }
 
             val valueLabel = label("0",11f)
             val fader = VerticalFader(this)
 
             column.addView(valueLabel)
-            column.addView(
-                fader,
-                LinearLayout.LayoutParams(dp(28),dp(170))
-            )
+            column.addView(fader, LinearLayout.LayoutParams(dp(28),dp(165)))
             column.addView(label(frequency,10f))
 
-            fader.onValueChanged = { value ->
-                valueLabel.text = value.toInt().toString()
-                processedAudio = null
+            fader.onValueChanged = {
+                valueLabel.text = it.toInt().toString()
+                updateEngine()
             }
 
-            sliders.add(fader)
-            sliderRow.addView(
+            list.add(fader)
+            row.addView(
                 column,
                 LinearLayout.LayoutParams(
                     0,
@@ -164,71 +173,69 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        faders = sliders
-        content.addView(sliderRow)
+        faders = list
+        content.addView(row)
 
         presetSpinner.onItemSelectedListener =
-            object : android.widget.AdapterView.OnItemSelectedListener {
-                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+            object : AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: AdapterView<*>?) {}
 
                 override fun onItemSelected(
-                    parent: android.widget.AdapterView<*>?,
+                    parent: AdapterView<*>?,
                     view: View?,
                     position: Int,
                     id: Long
                 ) {
                     val values = presets.values.elementAt(position)
-                    faders.forEachIndexed { index, fader ->
-                        fader.value = values[index]
+                    faders.forEachIndexed { i, fader ->
+                        fader.value = values[i]
                     }
-                    processedAudio = null
+                    updateEngine()
                 }
             }
 
         bassSwitch = Switch(this).apply {
             text = "Refuerzo de graves"
             setTextColor(0xFFFFFFFF.toInt())
+            setOnCheckedChangeListener { _, _ -> updateEngine() }
         }
 
         reverbSwitch = Switch(this).apply {
             text = "Reverberación"
             setTextColor(0xFFFFFFFF.toInt())
+            setOnCheckedChangeListener { _, _ -> updateEngine() }
         }
 
         stereoSwitch = Switch(this).apply {
             text = "Amplitud estéreo"
             setTextColor(0xFFFFFFFF.toInt())
+            setOnCheckedChangeListener { _, _ -> updateEngine() }
         }
 
         content.addView(bassSwitch)
         content.addView(reverbSwitch)
         content.addView(stereoSwitch)
-        content.addView(label("Los efectos se aplican al exportar el audio.",12f))
 
-        val previewButton = Button(this).apply {
-            text = "ESCUCHAR RESULTADO"
-            setOnClickListener {
-                val audio = processedAudio
-                if (audio == null) {
-                    message("Primero procesa una canción.")
-                } else {
-                    previewAudio(audio)
-                }
-            }
+        content.addView(label(
+            "Mueve los controles mientras escuchas la canción.",
+            12f
+        ))
+
+        playButton = Button(this).apply {
+            text = "REPRODUCIR EN VIVO"
+            isEnabled = false
+            setOnClickListener { togglePlayback() }
         }
-        content.addView(previewButton,matchParams())
+        content.addView(playButton, params())
 
         exportButton = Button(this).apply {
             text = "EXPORTAR WAV"
             isEnabled = false
-            setOnClickListener {
-                if (processedAudio != null) {
-                    savePicker.launch("IAM_HUMANIZER.wav")
-                }
-            }
+            setOnClickListener { exportAudio() }
         }
-        content.addView(exportButton,matchParams())
-        content.addView(label("I.A.M · Procesamiento local en tu teléfono",11f))
+        content.addView(exportButton, params())
+
+        content.addView(label("I.A.M · Procesamiento local",11f))
 
         scroll.addView(content)
         root.addView(
@@ -242,78 +249,120 @@ class MainActivity : ComponentActivity() {
         setContentView(root)
     }
 
-    private fun matchParams() = LinearLayout.LayoutParams(
+    private fun params() = LinearLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
         ViewGroup.LayoutParams.WRAP_CONTENT
-    ).apply { bottomMargin = dp(10) }
+    ).apply { bottomMargin = dp(9) }
 
-    private fun dp(value: Int): Int =
+    private fun dp(value: Int) =
         (value * resources.displayMetrics.density).toInt()
 
-    private fun processAudio(uri: Uri) {
-        stopPreview()
+    private fun gains() = faders.map { it.value }.toFloatArray()
+
+    private fun updateEngine() {
+        val current = engine ?: return
+        current.setGains(gains())
+        current.bassEnabled = bassSwitch.isChecked
+        current.reverbEnabled = reverbSwitch.isChecked
+        current.stereoEnabled = stereoSwitch.isChecked
+    }
+
+    private fun togglePlayback() {
+        val samples = audio ?: return message("Selecciona una canción primero.")
+
+        if (engine?.isPlaying() == true) {
+            engine?.stop()
+            playButton.text = "REPRODUCIR EN VIVO"
+            status.text = "Reproducción detenida."
+            return
+        }
+
+        try {
+            engine?.stop()
+            val newEngine = LiveAudioEngine(rate, channels, samples)
+            newEngine.setGains(gains())
+            newEngine.bassEnabled = bassSwitch.isChecked
+            newEngine.reverbEnabled = reverbSwitch.isChecked
+            newEngine.stereoEnabled = stereoSwitch.isChecked
+
+            engine = newEngine
+            newEngine.start()
+
+            playButton.text = "DETENER REPRODUCCIÓN"
+            status.text = "Reproduciendo. Ajusta el ecualizador."
+            watchPlayback()
+        } catch (e: Exception) {
+            engine = null
+            playButton.text = "REPRODUCIR EN VIVO"
+            message(e.message ?: "No se pudo reproducir.")
+        }
+    }
+
+    private fun watchPlayback() {
+        handler.postDelayed({
+            if (engine?.isPlaying() != true) {
+                playButton.text = "REPRODUCIR EN VIVO"
+            } else {
+                watchPlayback()
+            }
+        }, 400)
+    }
+
+    private fun stopPlayback() {
+        engine?.stop()
+        engine = null
+        if (::playButton.isInitialized) {
+            playButton.text = "REPRODUCIR EN VIVO"
+        }
+    }
+
+    private fun loadAudio(uri: Uri) {
+        stopPlayback()
+        audio = null
         selectButton.isEnabled = false
+        playButton.isEnabled = false
         exportButton.isEnabled = false
         progress.visibility = View.VISIBLE
-        status.text = "Decodificando y aplicando efectos..."
-
-        val gains = faders.map { it.value }.toFloatArray()
-        val bass = bassSwitch.isChecked
-        val reverb = reverbSwitch.isChecked
-        val stereo = stereoSwitch.isChecked
+        status.text = "Cargando canción..."
 
         Thread {
             try {
-                val decoded = decodeAudio(uri)
-                if (decoded.isEmpty()) {
-                    throw Exception("El archivo no contiene audio.")
-                }
-
-                val result = applyEffects(
-                    decoded,
-                    outputSampleRate,
-                    outputChannels,
-                    gains,
-                    bass,
-                    reverb,
-                    stereo
-                )
-
-                val wav = pcmToWav(result,outputSampleRate,outputChannels)
-
-                mainHandler.post {
-                    processedAudio = wav
+                val decoded = decode(uri)
+                handler.post {
+                    audio = decoded.samples
+                    rate = decoded.sampleRate
+                    channels = decoded.channelCount
                     progress.visibility = View.GONE
                     selectButton.isEnabled = true
+                    playButton.isEnabled = true
                     exportButton.isEnabled = true
-                    status.text = "¡Audio procesado! Ya puedes escucharlo o exportarlo."
-                    message("Procesamiento terminado.")
+                    status.text = "Canción lista. Pulsa reproducir."
+                    message("Audio cargado correctamente.")
                 }
             } catch (e: Exception) {
-                mainHandler.post {
+                handler.post {
                     progress.visibility = View.GONE
                     selectButton.isEnabled = true
-                    status.text = "No se pudo procesar el audio."
-                    message(e.message ?: "Error de procesamiento.")
+                    status.text = "Error al cargar canción."
+                    message(e.message ?: "Error de audio.")
                 }
             }
         }.start()
     }
 
-    private fun decodeAudio(uri: Uri): ShortArray {
+    private fun decode(uri: Uri): Decoded {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
 
         try {
-            extractor.setDataSource(this,uri,null)
+            extractor.setDataSource(this, uri, null)
 
             var track = -1
             var format: MediaFormat? = null
 
             for (i in 0 until extractor.trackCount) {
                 val candidate = extractor.getTrackFormat(i)
-                val mime = candidate.getString(MediaFormat.KEY_MIME) ?: ""
-                if (mime.startsWith("audio/")) {
+                if ((candidate.getString(MediaFormat.KEY_MIME) ?: "").startsWith("audio/")) {
                     track = i
                     format = candidate
                     break
@@ -321,111 +370,118 @@ class MainActivity : ComponentActivity() {
             }
 
             if (track < 0 || format == null) {
-                throw Exception("No se encontró una pista de audio.")
+                throw Exception("No se encontró audio.")
             }
 
             extractor.selectTrack(track)
-
             val mime = format.getString(MediaFormat.KEY_MIME)
-                ?: throw Exception("Formato de audio desconocido.")
+                ?: throw Exception("Formato desconocido.")
 
             codec = MediaCodec.createDecoderByType(mime)
-            codec.configure(format,null,null,0)
+            codec.configure(format, null, null, 0)
             codec.start()
 
             val output = ByteArrayOutputStream()
             val info = MediaCodec.BufferInfo()
+            var inputDone = false
+            var outputDone = false
+            var sr = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            var ch = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            var encoding = AudioFormat.ENCODING_PCM_16BIT
 
-            var inputFinished = false
-            var outputFinished = false
-            var sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-            var channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-            var encoding = 2
-
-            while (!outputFinished) {
-                if (!inputFinished) {
-                    val inputIndex = codec.dequeueInputBuffer(10000)
-                    if (inputIndex >= 0) {
-                        val inputBuffer = codec.getInputBuffer(inputIndex)
-                            ?: throw Exception("Error leyendo el audio.")
-
-                        val size = extractor.readSampleData(inputBuffer,0)
+            while (!outputDone) {
+                if (!inputDone) {
+                    val index = codec.dequeueInputBuffer(10000)
+                    if (index >= 0) {
+                        val input = codec.getInputBuffer(index)
+                            ?: throw Exception("Error leyendo audio.")
+                        input.clear()
+                        val size = extractor.readSampleData(input, 0)
 
                         if (size < 0) {
                             codec.queueInputBuffer(
-                                inputIndex,0,0,0,
+                                index, 0, 0, 0,
                                 MediaCodec.BUFFER_FLAG_END_OF_STREAM
                             )
-                            inputFinished = true
+                            inputDone = true
                         } else {
                             codec.queueInputBuffer(
-                                inputIndex,0,size,extractor.sampleTime,0
+                                index, 0, size, extractor.sampleTime, 0
                             )
                             extractor.advance()
                         }
                     }
                 }
 
-                val outputIndex = codec.dequeueOutputBuffer(info,10000)
-
+                val outIndex = codec.dequeueOutputBuffer(info, 10000)
                 when {
-                    outputIndex >= 0 -> {
-                        val buffer = codec.getOutputBuffer(outputIndex)
-
+                    outIndex >= 0 -> {
+                        val buffer = codec.getOutputBuffer(outIndex)
                         if (buffer != null && info.size > 0) {
-                            val outFormat = codec.outputFormat
-
-                            if (outFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
-                                sampleRate = outFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                            val fmt = codec.outputFormat
+                            if (fmt.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                                sr = fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                             }
-                            if (outFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
-                                channels = outFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                            if (fmt.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+                                ch = fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
                             }
-                            if (outFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
-                                encoding = outFormat.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                            if (fmt.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
+                                encoding = fmt.getInteger(MediaFormat.KEY_PCM_ENCODING)
                             }
 
                             buffer.position(info.offset)
                             buffer.limit(info.offset + info.size)
-
                             val chunk = ByteArray(info.size)
                             buffer.get(chunk)
                             output.write(chunk)
 
                             if (output.size() > 100 * 1024 * 1024) {
-                                throw Exception("El audio supera el límite de memoria de 100 MB.")
+                                throw Exception("Audio demasiado grande: límite 100 MB.")
                             }
                         }
 
                         val ended =
                             info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
-
-                        codec.releaseOutputBuffer(outputIndex,false)
-                        if (ended) outputFinished = true
+                        codec.releaseOutputBuffer(outIndex, false)
+                        if (ended) outputDone = true
                     }
 
-                    outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        val newFormat = codec.outputFormat
-                        sampleRate = newFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-                        channels = newFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-                        if (newFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
-                            encoding = newFormat.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                    outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        val fmt = codec.outputFormat
+                        sr = fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                        ch = fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                        if (fmt.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
+                            encoding = fmt.getInteger(MediaFormat.KEY_PCM_ENCODING)
                         }
                     }
                 }
             }
 
-            if (channels !in 1..2) {
-                throw Exception("Esta versión admite audio mono o estéreo.")
-            }
-            if (sampleRate !in 8000..192000) {
-                throw Exception("Frecuencia de audio no compatible.")
+            if (ch !in 1..2 || sr !in 8000..192000) {
+                throw Exception("Formato de audio no compatible.")
             }
 
-            outputSampleRate = sampleRate
-            outputChannels = channels
+            val bytes = output.toByteArray()
+            val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.nativeOrder())
 
-            return convertToPcm16(output.toByteArray(),encoding)
+            val samples = when (encoding) {
+                AudioFormat.ENCODING_PCM_16BIT ->
+                    ShortArray(bytes.size / 2) { buffer.short }
+
+                AudioFormat.ENCODING_PCM_FLOAT ->
+                    ShortArray(bytes.size / 4) {
+                        (buffer.float.coerceIn(-1f,1f) * 32767f).toInt().toShort()
+                    }
+
+                AudioFormat.ENCODING_PCM_8BIT ->
+                    ShortArray(bytes.size) {
+                        (((bytes[it].toInt() and 255) - 128) shl 8).toShort()
+                    }
+
+                else -> throw Exception("PCM no compatible.")
+            }
+
+            return Decoded(samples, sr, ch)
         } finally {
             try { codec?.stop() } catch (_: Exception) {}
             try { codec?.release() } catch (_: Exception) {}
@@ -433,28 +489,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun convertToPcm16(data: ByteArray, encoding: Int): ShortArray {
-        val buffer = ByteBuffer.wrap(data).order(ByteOrder.nativeOrder())
-
-        return when (encoding) {
-            2 -> {
-                val count = data.size / 2
-                ShortArray(count) { buffer.short }
-            }
-            4 -> {
-                val count = data.size / 4
-                ShortArray(count) {
-                    (buffer.float.coerceIn(-1f,1f) * 32767f).toInt().toShort()
-                }
-            }
-            3 -> ShortArray(data.size) {
-                (((data[it].toInt() and 255) - 128) shl 8).toShort()
-            }
-            else -> throw Exception("Formato PCM no compatible.")
-        }
-    }
-
-    private data class Biquad(
+    private data class Filter(
         val b0: Double,
         val b1: Double,
         val b2: Double,
@@ -476,217 +511,180 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun makePeaking(
-        frequency: Double,
-        gainDb: Double,
-        sampleRate: Double
-    ): Biquad? {
-        val freq = frequency.coerceIn(20.0,sampleRate*0.45)
-        if (freq >= sampleRate/2.0) return null
+    private fun makeFilter(freq: Double, db: Double, sr: Double): Filter? {
+        val f = freq.coerceIn(20.0, sr * 0.45)
+        if (f >= sr / 2.0) return null
+        val a = 10.0.pow(db / 40.0)
+        val w = 2.0 * PI * f / sr
+        val alpha = sin(w) / 1.2
+        val c = cos(w)
+        val a0 = 1.0 + alpha / a
 
-        val a = 10.0.pow(gainDb/40.0)
-        val w = 2.0*PI*freq/sampleRate
-        val alpha = sin(w)/1.2
-        val cosW = cos(w)
-        val a0 = 1.0 + alpha/a
-
-        return Biquad(
-            (1.0+alpha*a)/a0,
-            (-2.0*cosW)/a0,
-            (1.0-alpha*a)/a0,
-            (-2.0*cosW)/a0,
-            (1.0-alpha/a)/a0
+        return Filter(
+            (1.0 + alpha*a) / a0,
+            (-2.0*c) / a0,
+            (1.0 - alpha*a) / a0,
+            (-2.0*c) / a0,
+            (1.0 - alpha/a) / a0
         )
     }
 
-    // FUNCIÓN CORREGIDA: filtros con tipos explícitos y sin fold ambiguo.
     private fun applyEffects(
         input: ShortArray,
-        sampleRate: Int,
-        channels: Int,
-        gains: FloatArray,
+        sr: Int,
+        ch: Int,
+        values: FloatArray,
         bass: Boolean,
         reverb: Boolean,
         stereo: Boolean
     ): ShortArray {
+        val hz = doubleArrayOf(31.0,62.0,125.0,250.0,500.0,1000.0,2000.0,4000.0,8000.0,16000.0)
 
-        val frequenciesHz = doubleArrayOf(
-            31.0,62.0,125.0,250.0,500.0,
-            1000.0,2000.0,4000.0,8000.0,16000.0
-        )
-
-        val filters: Array<MutableList<Biquad>> = Array(channels) {
-            val channelFilters = mutableListOf<Biquad>()
-
-            for (index in frequenciesHz.indices) {
-                val filter: Biquad? = makePeaking(
-                    frequenciesHz[index],
-                    gains[index].toDouble(),
-                    sampleRate.toDouble()
-                )
-                if (filter != null) channelFilters.add(filter)
+        val filters = Array(ch) {
+            hz.indices.mapNotNull {
+                makeFilter(hz[it], values[it].toDouble(), sr.toDouble())
             }
-            channelFilters
         }
 
-        val bassFilters: Array<MutableList<Biquad>>? = if (bass) {
-            Array(channels) {
-                val list = mutableListOf<Biquad>()
-                val filter: Biquad? =
-                    makePeaking(90.0,4.0,sampleRate.toDouble())
-                if (filter != null) list.add(filter)
-                list
-            }
+        val bassFilters = if (bass) {
+            Array(ch) { listOfNotNull(makeFilter(90.0, 4.0, sr.toDouble())) }
         } else null
 
-        val delayFrames = (sampleRate*0.22).toInt().coerceAtLeast(1)
-        val delay = if (reverb) DoubleArray(delayFrames*channels) else null
-        var delayPosition = 0
-
+        val delayFrames = (sr * 0.22).toInt().coerceAtLeast(1)
+        val delay = if (reverb) DoubleArray(delayFrames * ch) else null
+        var delayPos = 0
         val output = ShortArray(input.size)
-        val frameCount = input.size/channels
 
-        for (frame in 0 until frameCount) {
-            var left = input[frame*channels].toDouble()/32768.0
-            var right = if (channels == 2) {
-                input[frame*channels+1].toDouble()/32768.0
-            } else left
+        for (frame in input.indices step ch) {
+            var left = input[frame].toDouble() / 32768.0
+            var right = if (ch == 2) input[frame+1].toDouble() / 32768.0 else left
 
-            for (filter in filters[0]) {
-                left = filter.process(left)
+            for (filter in filters[0]) left = filter.process(left)
+            bassFilters?.get(0)?.forEach { left = it.process(left) }
+
+            if (ch == 2) {
+                for (filter in filters[1]) right = filter.process(right)
+                bassFilters?.get(1)?.forEach { right = it.process(right) }
             }
 
-            if (bassFilters != null) {
-                for (filter in bassFilters[0]) {
-                    left = filter.process(left)
-                }
-            }
-
-            if (channels == 2) {
-                for (filter in filters[1]) {
-                    right = filter.process(right)
-                }
-
-                if (bassFilters != null) {
-                    for (filter in bassFilters[1]) {
-                        right = filter.process(right)
-                    }
-                }
-            }
-
-            if (stereo && channels == 2) {
-                val mid = (left+right)*0.5
-                val side = (left-right)*0.5*1.35
-                left = mid+side
-                right = mid-side
+            if (stereo && ch == 2) {
+                val mid = (left + right) * 0.5
+                val side = (left - right) * 0.5 * 1.25
+                left = mid + side
+                right = mid - side
             }
 
             if (delay != null) {
-                val index = delayPosition*channels
-                val delayedLeft = delay[index]
-                delay[index] = left+delayedLeft*0.28
-                left += delayedLeft*0.22
+                val index = delayPos * ch
+                val oldLeft = delay[index]
+                delay[index] = left + oldLeft * 0.28
+                left += oldLeft * 0.22
 
-                if (channels == 2) {
-                    val delayedRight = delay[index+1]
-                    delay[index+1] = right+delayedRight*0.28
-                    right += delayedRight*0.22
+                if (ch == 2) {
+                    val oldRight = delay[index+1]
+                    delay[index+1] = right + oldRight * 0.28
+                    right += oldRight * 0.22
                 }
 
-                delayPosition++
-                if (delayPosition >= delayFrames) delayPosition = 0
+                delayPos = (delayPos + 1) % delayFrames
             }
 
-            left = left/(1.0+abs(left)*0.35)
-            right = right/(1.0+abs(right)*0.35)
+            left /= 1.0 + abs(left) * 0.35
+            right /= 1.0 + abs(right) * 0.35
 
-            output[frame*channels] =
-                (left*32767.0).roundToInt().coerceIn(-32768,32767).toShort()
+            output[frame] = (left * 32767.0).roundToInt()
+                .coerceIn(-32768,32767).toShort()
 
-            if (channels == 2) {
-                output[frame*channels+1] =
-                    (right*32767.0).roundToInt().coerceIn(-32768,32767).toShort()
+            if (ch == 2) {
+                output[frame+1] = (right * 32767.0).roundToInt()
+                    .coerceIn(-32768,32767).toShort()
             }
         }
 
         return output
     }
 
-    private fun pcmToWav(
-        samples: ShortArray,
-        sampleRate: Int,
-        channels: Int
-    ): ByteArray {
-        val dataSize = samples.size*2
-        val buffer = ByteBuffer.allocate(44+dataSize).order(ByteOrder.LITTLE_ENDIAN)
+    private fun wav(samples: ShortArray, sr: Int, ch: Int): ByteArray {
+        val size = samples.size * 2
+        val b = ByteBuffer.allocate(44 + size).order(ByteOrder.LITTLE_ENDIAN)
 
-        buffer.put("RIFF".toByteArray(Charsets.US_ASCII))
-        buffer.putInt(36+dataSize)
-        buffer.put("WAVE".toByteArray(Charsets.US_ASCII))
-        buffer.put("fmt ".toByteArray(Charsets.US_ASCII))
-        buffer.putInt(16)
-        buffer.putShort(1)
-        buffer.putShort(channels.toShort())
-        buffer.putInt(sampleRate)
-        buffer.putInt(sampleRate*channels*2)
-        buffer.putShort((channels*2).toShort())
-        buffer.putShort(16)
-        buffer.put("data".toByteArray(Charsets.US_ASCII))
-        buffer.putInt(dataSize)
-
-        samples.forEach { buffer.putShort(it) }
-        return buffer.array()
+        b.put("RIFF".toByteArray(Charsets.US_ASCII))
+        b.putInt(36 + size)
+        b.put("WAVE".toByteArray(Charsets.US_ASCII))
+        b.put("fmt ".toByteArray(Charsets.US_ASCII))
+        b.putInt(16)
+        b.putShort(1)
+        b.putShort(ch.toShort())
+        b.putInt(sr)
+        b.putInt(sr * ch * 2)
+        b.putShort((ch * 2).toShort())
+        b.putShort(16)
+        b.put("data".toByteArray(Charsets.US_ASCII))
+        b.putInt(size)
+        samples.forEach { b.putShort(it) }
+        return b.array()
     }
 
-    private fun previewAudio(wav: ByteArray) {
-        try {
-            stopPreview()
-            val file = java.io.File(cacheDir,"iam_preview.wav")
-            file.writeBytes(wav)
+    private fun exportAudio() {
+        val samples = audio ?: return
+        val values = gains()
+        val sr = rate
+        val ch = channels
+        val bass = bassSwitch.isChecked
+        val reverb = reverbSwitch.isChecked
+        val stereo = stereoSwitch.isChecked
 
-            player = MediaPlayer().apply {
-                setDataSource(file.absolutePath)
-                setOnPreparedListener { it.start() }
-                setOnCompletionListener { stopPreview() }
-                prepareAsync()
+        exportButton.isEnabled = false
+        progress.visibility = View.VISIBLE
+        status.text = "Preparando WAV..."
+
+        Thread {
+            try {
+                val result = applyEffects(
+                    samples, sr, ch, values, bass, reverb, stereo
+                )
+                val resultWav = wav(result, sr, ch)
+
+                handler.post {
+                    pendingWav = resultWav
+                    progress.visibility = View.GONE
+                    exportButton.isEnabled = true
+                    status.text = "Selecciona dónde guardar el WAV."
+                    savePicker.launch("IAM_HUMANIZER.wav")
+                }
+            } catch (e: Exception) {
+                handler.post {
+                    progress.visibility = View.GONE
+                    exportButton.isEnabled = true
+                    message(e.message ?: "Error preparando WAV.")
+                }
             }
-            status.text = "Preparando reproducción..."
-        } catch (e: Exception) {
-            message("No se pudo reproducir la vista previa.")
-        }
-    }
-
-    private fun stopPreview() {
-        try {
-            player?.stop()
-            player?.release()
-        } catch (_: Exception) {
-        }
-        player = null
+        }.start()
     }
 
     private fun saveWav(uri: Uri) {
-        val audio = processedAudio ?: return
-
+        val data = pendingWav ?: return
         try {
             contentResolver.openOutputStream(uri)?.use {
-                it.write(audio)
+                it.write(data)
                 it.flush()
-            } ?: throw Exception("No se pudo guardar el archivo.")
+            } ?: throw Exception("No se pudo guardar.")
 
-            status.text = "¡Canción exportada correctamente!"
-            message("WAV guardado.")
+            pendingWav = null
+            status.text = "WAV exportado correctamente."
+            message("Canción guardada.")
         } catch (e: Exception) {
-            message(e.message ?: "Error al guardar.")
+            message(e.message ?: "Error guardando WAV.")
         }
     }
 
     private fun message(text: String) {
-        Toast.makeText(this,text,Toast.LENGTH_LONG).show()
+        Toast.makeText(this, text, Toast.LENGTH_LONG).show()
     }
 
     override fun onDestroy() {
-        stopPreview()
+        handler.removeCallbacksAndMessages(null)
+        stopPlayback()
         super.onDestroy()
     }
 }
@@ -716,22 +714,20 @@ class VerticalFader(context: android.content.Context) : View(context) {
 
     private val knobPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFFFA13B.toInt()
-        style = Paint.Style.FILL
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-
-        val centerX = width/2f
+        val x = width / 2f
         val top = 12f
-        val bottom = height-12f
-        val centerY = (top+bottom)/2f
-        val range = (bottom-top)/2f
-        val knobY = centerY-(value/12f)*range
+        val bottom = height - 12f
+        val center = (top + bottom) / 2f
+        val range = (bottom - top) / 2f
+        val y = center - (value / 12f) * range
 
-        canvas.drawLine(centerX,top,centerX,bottom,linePaint)
-        canvas.drawLine(centerX,centerY,centerX,knobY,activePaint)
-        canvas.drawCircle(centerX,knobY,10f,knobPaint)
+        canvas.drawLine(x,top,x,bottom,linePaint)
+        canvas.drawLine(x,center,x,y,activePaint)
+        canvas.drawCircle(x,y,10f,knobPaint)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -739,16 +735,13 @@ class VerticalFader(context: android.content.Context) : View(context) {
             MotionEvent.ACTION_DOWN,
             MotionEvent.ACTION_MOVE -> {
                 val top = 12f
-                val bottom = height-12f
-                val center = (top+bottom)/2f
-                val range = (bottom-top)/2f
-                val y = event.y.coerceIn(top,bottom)
-
-                value = ((center-y)/range)*12f
+                val bottom = height - 12f
+                val center = (top + bottom) / 2f
+                val range = (bottom - top) / 2f
+                value = ((center - event.y.coerceIn(top,bottom)) / range) * 12f
                 parent?.requestDisallowInterceptTouchEvent(true)
                 return true
             }
-
             MotionEvent.ACTION_UP -> {
                 performClick()
                 return true
