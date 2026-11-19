@@ -1,7 +1,6 @@
 
 package com.iam.humanizer
 
-import android.content.Intent
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.media.MediaCodec
@@ -42,14 +41,14 @@ class MainActivity : ComponentActivity() {
     )
 
     private val presets = linkedMapOf(
-        "Personalizado" to floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f),
-        "Acústica" to floatArrayOf(2f, 2f, 1f, 0f, 1f, 2f, 2f, 1f, 1f, 1f),
-        "Pop" to floatArrayOf(-1f, 0f, 1f, 2f, 1f, 0f, 1f, 2f, 2f, 1f),
-        "Rock" to floatArrayOf(3f, 2f, -1f, -2f, 0f, 1f, 2f, 3f, 3f, 2f),
-        "Hip Hop" to floatArrayOf(4f, 4f, 2f, 0f, -1f, 0f, 1f, 1f, 2f, 1f),
-        "Jazz" to floatArrayOf(2f, 1f, 0f, 1f, -1f, -1f, 0f, 1f, 2f, 2f),
-        "Heavy Metal" to floatArrayOf(3f, 2f, 1f, -1f, 1f, 2f, 3f, 2f, 1f, 2f),
-        "Clásica" to floatArrayOf(2f, 1f, 0f, 0f, 0f, 1f, 1f, 2f, 2f, 2f)
+        "Personalizado" to floatArrayOf(0f,0f,0f,0f,0f,0f,0f,0f,0f,0f),
+        "Acústica" to floatArrayOf(2f,2f,1f,0f,1f,2f,2f,1f,1f,1f),
+        "Pop" to floatArrayOf(-1f,0f,1f,2f,1f,0f,1f,2f,2f,1f),
+        "Rock" to floatArrayOf(3f,2f,-1f,-2f,0f,1f,2f,3f,3f,2f),
+        "Hip Hop" to floatArrayOf(4f,4f,2f,0f,-1f,0f,1f,1f,2f,1f),
+        "Jazz" to floatArrayOf(2f,1f,0f,1f,-1f,-1f,0f,1f,2f,2f),
+        "Heavy Metal" to floatArrayOf(3f,2f,1f,-1f,1f,2f,3f,2f,1f,2f),
+        "Clásica" to floatArrayOf(2f,1f,0f,0f,0f,1f,1f,2f,2f,2f)
     )
 
     private var processedAudio: ByteArray? = null
@@ -76,7 +75,7 @@ class MainActivity : ComponentActivity() {
     private fun createInterface() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(18, 24, 18, 24)
+            setPadding(18,24,18,24)
             setBackgroundColor(0xFF101116.toInt())
         }
 
@@ -92,30 +91,26 @@ class MainActivity : ComponentActivity() {
                 textSize = size
                 gravity = Gravity.CENTER
                 setTextColor(0xFFF3F3F3.toInt())
-                setPadding(4, 10, 4, 10)
+                setPadding(4,10,4,10)
             }
         }
 
-        content.addView(label("I.A.M HUMANIZER", 27f))
-        content.addView(label("ESTUDIO DE AUDIO · ECUALIZADOR PRO", 13f))
+        content.addView(label("I.A.M HUMANIZER",27f))
+        content.addView(label("ESTUDIO DE AUDIO · ECUALIZADOR PRO",13f))
 
         status = label("Selecciona una canción para comenzar.")
         content.addView(status)
 
-        progress = ProgressBar(this).apply {
-            visibility = View.GONE
-        }
+        progress = ProgressBar(this).apply { visibility = View.GONE }
         content.addView(progress)
 
         selectButton = Button(this).apply {
             text = "SELECCIONAR CANCIÓN"
-            setOnClickListener {
-                audioPicker.launch(arrayOf("audio/*"))
-            }
+            setOnClickListener { audioPicker.launch(arrayOf("audio/*")) }
         }
-        content.addView(selectButton, matchParams())
+        content.addView(selectButton,matchParams())
 
-        content.addView(label("ECUALIZADOR DE 10 BANDAS", 18f))
+        content.addView(label("ECUALIZADOR DE 10 BANDAS",18f))
 
         presetSpinner = Spinner(this)
         val presetAdapter = ArrayAdapter(
@@ -123,9 +118,11 @@ class MainActivity : ComponentActivity() {
             android.R.layout.simple_spinner_item,
             presets.keys.toList()
         )
-        presetAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        presetAdapter.setDropDownViewResource(
+            android.R.layout.simple_spinner_dropdown_item
+        )
         presetSpinner.adapter = presetAdapter
-        content.addView(presetSpinner, matchParams())
+        content.addView(presetSpinner,matchParams())
 
         val sliderRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -138,32 +135,32 @@ class MainActivity : ComponentActivity() {
             val column = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                setPadding(2, 4, 2, 4)
+                setPadding(2,4,2,4)
             }
 
-            val valueLabel = label("0", 11f)
+            val valueLabel = label("0",11f)
             val fader = VerticalFader(this)
 
             column.addView(valueLabel)
             column.addView(
                 fader,
-                LinearLayout.LayoutParams(
-                    dp(28),
-                    dp(170)
-                )
+                LinearLayout.LayoutParams(dp(28),dp(170))
             )
-            column.addView(label(frequency, 10f))
+            column.addView(label(frequency,10f))
 
             fader.onValueChanged = { value ->
                 valueLabel.text = value.toInt().toString()
-                presetSpinner.setSelection(0)
                 processedAudio = null
             }
 
             sliders.add(fader)
             sliderRow.addView(
                 column,
-                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                LinearLayout.LayoutParams(
+                    0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    1f
+                )
             )
         }
 
@@ -206,8 +203,7 @@ class MainActivity : ComponentActivity() {
         content.addView(bassSwitch)
         content.addView(reverbSwitch)
         content.addView(stereoSwitch)
-
-        content.addView(label("Los efectos se aplican al exportar el audio.", 12f))
+        content.addView(label("Los efectos se aplican al exportar el audio.",12f))
 
         val previewButton = Button(this).apply {
             text = "ESCUCHAR RESULTADO"
@@ -220,7 +216,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        content.addView(previewButton, matchParams())
+        content.addView(previewButton,matchParams())
 
         exportButton = Button(this).apply {
             text = "EXPORTAR WAV"
@@ -231,9 +227,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        content.addView(exportButton, matchParams())
-
-        content.addView(label("I.A.M · Procesamiento local en tu teléfono", 11f))
+        content.addView(exportButton,matchParams())
+        content.addView(label("I.A.M · Procesamiento local en tu teléfono",11f))
 
         scroll.addView(content)
         root.addView(
@@ -244,16 +239,13 @@ class MainActivity : ComponentActivity() {
                 1f
             )
         )
-
         setContentView(root)
     }
 
     private fun matchParams() = LinearLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
         ViewGroup.LayoutParams.WRAP_CONTENT
-    ).apply {
-        bottomMargin = dp(10)
-    }
+    ).apply { bottomMargin = dp(10) }
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
@@ -273,7 +265,9 @@ class MainActivity : ComponentActivity() {
         Thread {
             try {
                 val decoded = decodeAudio(uri)
-                if (decoded.isEmpty()) throw Exception("El archivo no contiene audio.")
+                if (decoded.isEmpty()) {
+                    throw Exception("El archivo no contiene audio.")
+                }
 
                 val result = applyEffects(
                     decoded,
@@ -285,7 +279,7 @@ class MainActivity : ComponentActivity() {
                     stereo
                 )
 
-                val wav = pcmToWav(result, outputSampleRate, outputChannels)
+                val wav = pcmToWav(result,outputSampleRate,outputChannels)
 
                 mainHandler.post {
                     processedAudio = wav
@@ -311,7 +305,7 @@ class MainActivity : ComponentActivity() {
         var codec: MediaCodec? = null
 
         try {
-            extractor.setDataSource(this, uri, null)
+            extractor.setDataSource(this,uri,null)
 
             var track = -1
             var format: MediaFormat? = null
@@ -336,7 +330,7 @@ class MainActivity : ComponentActivity() {
                 ?: throw Exception("Formato de audio desconocido.")
 
             codec = MediaCodec.createDecoderByType(mime)
-            codec.configure(format, null, null, 0)
+            codec.configure(format,null,null,0)
             codec.start()
 
             val output = ByteArrayOutputStream()
@@ -355,24 +349,24 @@ class MainActivity : ComponentActivity() {
                         val inputBuffer = codec.getInputBuffer(inputIndex)
                             ?: throw Exception("Error leyendo el audio.")
 
-                        val size = extractor.readSampleData(inputBuffer, 0)
+                        val size = extractor.readSampleData(inputBuffer,0)
 
                         if (size < 0) {
                             codec.queueInputBuffer(
-                                inputIndex, 0, 0, 0,
+                                inputIndex,0,0,0,
                                 MediaCodec.BUFFER_FLAG_END_OF_STREAM
                             )
                             inputFinished = true
                         } else {
                             codec.queueInputBuffer(
-                                inputIndex, 0, size, extractor.sampleTime, 0
+                                inputIndex,0,size,extractor.sampleTime,0
                             )
                             extractor.advance()
                         }
                     }
                 }
 
-                val outputIndex = codec.dequeueOutputBuffer(info, 10000)
+                val outputIndex = codec.dequeueOutputBuffer(info,10000)
 
                 when {
                     outputIndex >= 0 -> {
@@ -406,7 +400,7 @@ class MainActivity : ComponentActivity() {
                         val ended =
                             info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
 
-                        codec.releaseOutputBuffer(outputIndex, false)
+                        codec.releaseOutputBuffer(outputIndex,false)
                         if (ended) outputFinished = true
                     }
 
@@ -431,7 +425,7 @@ class MainActivity : ComponentActivity() {
             outputSampleRate = sampleRate
             outputChannels = channels
 
-            return convertToPcm16(output.toByteArray(), encoding)
+            return convertToPcm16(output.toByteArray(),encoding)
         } finally {
             try { codec?.stop() } catch (_: Exception) {}
             try { codec?.release() } catch (_: Exception) {}
@@ -450,7 +444,7 @@ class MainActivity : ComponentActivity() {
             4 -> {
                 val count = data.size / 4
                 ShortArray(count) {
-                    (buffer.float.coerceIn(-1f, 1f) * 32767f).toInt().toShort()
+                    (buffer.float.coerceIn(-1f,1f) * 32767f).toInt().toShort()
                 }
             }
             3 -> ShortArray(data.size) {
@@ -473,7 +467,7 @@ class MainActivity : ComponentActivity() {
         var y2 = 0.0
 
         fun process(x: Double): Double {
-            val y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+            val y = b0*x + b1*x1 + b2*x2 - a1*y1 - a2*y2
             x2 = x1
             x1 = x
             y2 = y1
@@ -487,25 +481,25 @@ class MainActivity : ComponentActivity() {
         gainDb: Double,
         sampleRate: Double
     ): Biquad? {
-        val freq = frequency.coerceIn(20.0, sampleRate * 0.45)
-        if (freq >= sampleRate / 2.0) return null
+        val freq = frequency.coerceIn(20.0,sampleRate*0.45)
+        if (freq >= sampleRate/2.0) return null
 
-        val a = 10.0.pow(gainDb / 40.0)
-        val w = 2.0 * PI * freq / sampleRate
-        val alpha = sin(w) / 1.2
+        val a = 10.0.pow(gainDb/40.0)
+        val w = 2.0*PI*freq/sampleRate
+        val alpha = sin(w)/1.2
         val cosW = cos(w)
-
-        val a0 = 1.0 + alpha / a
+        val a0 = 1.0 + alpha/a
 
         return Biquad(
-            (1.0 + alpha * a) / a0,
-            (-2.0 * cosW) / a0,
-            (1.0 - alpha * a) / a0,
-            (-2.0 * cosW) / a0,
-            (1.0 - alpha / a) / a0
+            (1.0+alpha*a)/a0,
+            (-2.0*cosW)/a0,
+            (1.0-alpha*a)/a0,
+            (-2.0*cosW)/a0,
+            (1.0-alpha/a)/a0
         )
     }
 
+    // FUNCIÓN CORREGIDA: filtros con tipos explícitos y sin fold ambiguo.
     private fun applyEffects(
         input: ShortArray,
         sampleRate: Int,
@@ -515,80 +509,103 @@ class MainActivity : ComponentActivity() {
         reverb: Boolean,
         stereo: Boolean
     ): ShortArray {
+
         val frequenciesHz = doubleArrayOf(
-            31.0, 62.0, 125.0, 250.0, 500.0,
-            1000.0, 2000.0, 4000.0, 8000.0, 16000.0
+            31.0,62.0,125.0,250.0,500.0,
+            1000.0,2000.0,4000.0,8000.0,16000.0
         )
 
-        val filters = Array(channels) {
-            frequenciesHz.mapIndexedNotNull { index, hz ->
-                makePeaking(hz, gains[index].toDouble(), sampleRate.toDouble())
+        val filters: Array<MutableList<Biquad>> = Array(channels) {
+            val channelFilters = mutableListOf<Biquad>()
+
+            for (index in frequenciesHz.indices) {
+                val filter: Biquad? = makePeaking(
+                    frequenciesHz[index],
+                    gains[index].toDouble(),
+                    sampleRate.toDouble()
+                )
+                if (filter != null) channelFilters.add(filter)
             }
+            channelFilters
         }
 
-        val bassFilters = if (bass) {
+        val bassFilters: Array<MutableList<Biquad>>? = if (bass) {
             Array(channels) {
-                listOfNotNull(makePeaking(90.0, 4.0, sampleRate.toDouble()))
+                val list = mutableListOf<Biquad>()
+                val filter: Biquad? =
+                    makePeaking(90.0,4.0,sampleRate.toDouble())
+                if (filter != null) list.add(filter)
+                list
             }
         } else null
 
-        val delayFrames = (sampleRate * 0.22).toInt().coerceAtLeast(1)
-        val delay = if (reverb) DoubleArray(delayFrames * channels) else null
+        val delayFrames = (sampleRate*0.22).toInt().coerceAtLeast(1)
+        val delay = if (reverb) DoubleArray(delayFrames*channels) else null
         var delayPosition = 0
 
         val output = ShortArray(input.size)
-        val frameCount = input.size / channels
+        val frameCount = input.size/channels
 
         for (frame in 0 until frameCount) {
-            var left = input[frame * channels].toDouble() / 32768.0
+            var left = input[frame*channels].toDouble()/32768.0
             var right = if (channels == 2) {
-                input[frame * channels + 1].toDouble() / 32768.0
+                input[frame*channels+1].toDouble()/32768.0
             } else left
 
-            left = filters[0].fold(left) { value, filter -> filter.process(value) }
+            for (filter in filters[0]) {
+                left = filter.process(left)
+            }
+
             if (bassFilters != null) {
-                left = bassFilters[0].fold(left) { value, filter -> filter.process(value) }
+                for (filter in bassFilters[0]) {
+                    left = filter.process(left)
+                }
             }
 
             if (channels == 2) {
-                right = filters[1].fold(right) { value, filter -> filter.process(value) }
+                for (filter in filters[1]) {
+                    right = filter.process(right)
+                }
+
                 if (bassFilters != null) {
-                    right = bassFilters[1].fold(right) { value, filter -> filter.process(value) }
+                    for (filter in bassFilters[1]) {
+                        right = filter.process(right)
+                    }
                 }
             }
 
             if (stereo && channels == 2) {
-                val mid = (left + right) * 0.5
-                val side = (left - right) * 0.5 * 1.35
-                left = mid + side
-                right = mid - side
+                val mid = (left+right)*0.5
+                val side = (left-right)*0.5*1.35
+                left = mid+side
+                right = mid-side
             }
 
             if (delay != null) {
-                val index = delayPosition * channels
+                val index = delayPosition*channels
                 val delayedLeft = delay[index]
-                delay[index] = left + delayedLeft * 0.28
-                left += delayedLeft * 0.22
+                delay[index] = left+delayedLeft*0.28
+                left += delayedLeft*0.22
 
                 if (channels == 2) {
-                    val delayedRight = delay[index + 1]
-                    delay[index + 1] = right + delayedRight * 0.28
-                    right += delayedRight * 0.22
+                    val delayedRight = delay[index+1]
+                    delay[index+1] = right+delayedRight*0.28
+                    right += delayedRight*0.22
                 }
 
                 delayPosition++
                 if (delayPosition >= delayFrames) delayPosition = 0
             }
 
-            left = left / (1.0 + abs(left) * 0.35)
-            right = right / (1.0 + abs(right) * 0.35)
+            left = left/(1.0+abs(left)*0.35)
+            right = right/(1.0+abs(right)*0.35)
 
-            output[frame * channels] =
-                (left * 32767.0).roundToInt().coerceIn(-32768, 32767).toShort()
+            output[frame*channels] =
+                (left*32767.0).roundToInt().coerceIn(-32768,32767).toShort()
 
             if (channels == 2) {
-                output[frame * channels + 1] =
-                    (right * 32767.0).roundToInt().coerceIn(-32768, 32767).toShort()
+                output[frame*channels+1] =
+                    (right*32767.0).roundToInt().coerceIn(-32768,32767).toShort()
             }
         }
 
@@ -600,19 +617,19 @@ class MainActivity : ComponentActivity() {
         sampleRate: Int,
         channels: Int
     ): ByteArray {
-        val dataSize = samples.size * 2
-        val buffer = ByteBuffer.allocate(44 + dataSize).order(ByteOrder.LITTLE_ENDIAN)
+        val dataSize = samples.size*2
+        val buffer = ByteBuffer.allocate(44+dataSize).order(ByteOrder.LITTLE_ENDIAN)
 
         buffer.put("RIFF".toByteArray(Charsets.US_ASCII))
-        buffer.putInt(36 + dataSize)
+        buffer.putInt(36+dataSize)
         buffer.put("WAVE".toByteArray(Charsets.US_ASCII))
         buffer.put("fmt ".toByteArray(Charsets.US_ASCII))
         buffer.putInt(16)
         buffer.putShort(1)
         buffer.putShort(channels.toShort())
         buffer.putInt(sampleRate)
-        buffer.putInt(sampleRate * channels * 2)
-        buffer.putShort((channels * 2).toShort())
+        buffer.putInt(sampleRate*channels*2)
+        buffer.putShort((channels*2).toShort())
         buffer.putShort(16)
         buffer.put("data".toByteArray(Charsets.US_ASCII))
         buffer.putInt(dataSize)
@@ -624,7 +641,7 @@ class MainActivity : ComponentActivity() {
     private fun previewAudio(wav: ByteArray) {
         try {
             stopPreview()
-            val file = java.io.File(cacheDir, "iam_preview.wav")
+            val file = java.io.File(cacheDir,"iam_preview.wav")
             file.writeBytes(wav)
 
             player = MediaPlayer().apply {
@@ -665,7 +682,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun message(text: String) {
-        Toast.makeText(this, text, Toast.LENGTH_LONG).show()
+        Toast.makeText(this,text,Toast.LENGTH_LONG).show()
     }
 
     override fun onDestroy() {
@@ -678,7 +695,7 @@ class VerticalFader(context: android.content.Context) : View(context) {
 
     var value: Float = 0f
         set(newValue) {
-            field = newValue.coerceIn(-12f, 12f)
+            field = newValue.coerceIn(-12f,12f)
             invalidate()
             onValueChanged?.invoke(field)
         }
@@ -705,16 +722,16 @@ class VerticalFader(context: android.content.Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        val centerX = width / 2f
+        val centerX = width/2f
         val top = 12f
-        val bottom = height - 12f
-        val centerY = (top + bottom) / 2f
-        val range = (bottom - top) / 2f
-        val knobY = centerY - (value / 12f) * range
+        val bottom = height-12f
+        val centerY = (top+bottom)/2f
+        val range = (bottom-top)/2f
+        val knobY = centerY-(value/12f)*range
 
-        canvas.drawLine(centerX, top, centerX, bottom, linePaint)
-        canvas.drawLine(centerX, centerY, centerX, knobY, activePaint)
-        canvas.drawCircle(centerX, knobY, 10f, knobPaint)
+        canvas.drawLine(centerX,top,centerX,bottom,linePaint)
+        canvas.drawLine(centerX,centerY,centerX,knobY,activePaint)
+        canvas.drawCircle(centerX,knobY,10f,knobPaint)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -722,15 +739,16 @@ class VerticalFader(context: android.content.Context) : View(context) {
             MotionEvent.ACTION_DOWN,
             MotionEvent.ACTION_MOVE -> {
                 val top = 12f
-                val bottom = height - 12f
-                val center = (top + bottom) / 2f
-                val range = (bottom - top) / 2f
-                val y = event.y.coerceIn(top, bottom)
+                val bottom = height-12f
+                val center = (top+bottom)/2f
+                val range = (bottom-top)/2f
+                val y = event.y.coerceIn(top,bottom)
 
-                value = (((center - y) / range) * 12f)
+                value = ((center-y)/range)*12f
                 parent?.requestDisallowInterceptTouchEvent(true)
                 return true
             }
+
             MotionEvent.ACTION_UP -> {
                 performClick()
                 return true
