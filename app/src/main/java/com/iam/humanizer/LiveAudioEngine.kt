@@ -154,7 +154,7 @@ class LiveAudioEngine(
         volumePercent = percent.coerceIn(0f, 120f)
     }
 
-    fun setVocalClarity(percent: Float) {
+    fun setVocalClarityLevel(percent: Float) {
         vocalClarity = percent.coerceIn(0f, 100f)
     }
 
