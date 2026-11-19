@@ -31,11 +31,18 @@ class MainActivity : ComponentActivity() {
     private lateinit var playButton: Button
     private lateinit var exportButton: Button
     private lateinit var progress: ProgressBar
+
     private lateinit var bassSwitch: Switch
     private lateinit var reverbSwitch: Switch
     private lateinit var stereoSwitch: Switch
     private lateinit var presetSpinner: Spinner
     private lateinit var faders: List<VerticalFader>
+
+    private lateinit var volumeSlider: SeekBar
+    private lateinit var claritySlider: SeekBar
+    private lateinit var volumeValue: TextView
+    private lateinit var clarityValue: TextView
+    private lateinit var analysisText: TextView
 
     private lateinit var mainScreen: View
     private lateinit var exportNameInput: EditText
@@ -44,7 +51,9 @@ class MainActivity : ComponentActivity() {
     private var audio: ShortArray? = null
     private var rate = 44100
     private var channels = 2
+
     private var engine: LiveAudioEngine? = null
+
     private val handler = Handler(Looper.getMainLooper())
     private var pendingWav: ByteArray? = null
 
@@ -79,6 +88,14 @@ class MainActivity : ComponentActivity() {
         val channelCount: Int
     )
 
+    private data class AudioStats(
+        val rmsDb: Float,
+        val peakDb: Float,
+        val lowPercent: Float,
+        val midPercent: Float,
+        val highPercent: Float
+    )
+
     private val audioPicker =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) {
             if (it != null) loadAudio(it)
@@ -91,8 +108,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         window.statusBarColor = 0xFF160D32.toInt()
         window.navigationBarColor = 0xFF100A25.toInt()
+
         buildInterface()
     }
 
@@ -112,10 +131,12 @@ class MainActivity : ComponentActivity() {
         button.textSize = 14f
         button.isAllCaps = false
         button.setTextColor(white)
+
         button.background = GradientDrawable().apply {
             setColor(color)
             cornerRadius = dp(15).toFloat()
         }
+
         button.setPadding(dp(12), dp(12), dp(12), dp(12))
     }
 
@@ -126,10 +147,22 @@ class MainActivity : ComponentActivity() {
         bottomMargin = dp(9)
     }
 
+    private fun addSection(
+        parent: LinearLayout,
+        title: String
+    ) {
+        parent.addView(label(title, 18f).apply {
+            setTextColor(cyan)
+            paint.isFakeBoldText = true
+        })
+    }
+
     private fun buildInterface() {
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), dp(14), dp(14), dp(14))
+
             background = GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
                 intArrayOf(
@@ -141,6 +174,7 @@ class MainActivity : ComponentActivity() {
         }
 
         val scroll = ScrollView(this)
+
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
@@ -153,6 +187,7 @@ class MainActivity : ComponentActivity() {
             scaleType = ImageView.ScaleType.FIT_CENTER
             adjustViewBounds = true
         }
+
         content.addView(logo, LinearLayout.LayoutParams(dp(125), dp(125)))
 
         content.addView(label("I-A-M", 32f).apply {
@@ -160,9 +195,14 @@ class MainActivity : ComponentActivity() {
             paint.isFakeBoldText = true
         })
 
-        content.addView(label("ESTUDIO DE AUDIO EN VIVO", 13f).apply {
+        content.addView(label("SMART AUDIO ENGINE", 15f).apply {
             setTextColor(cyan)
+            paint.isFakeBoldText = true
         })
+
+        content.addView(label(
+            "Estudio de audio inteligente · Procesamiento local", 12f
+        ))
 
         content.addView(label(
             "Mejora tu sonido y dale prioridad a la voz.", 13f
@@ -171,25 +211,29 @@ class MainActivity : ComponentActivity() {
         status = label("Selecciona una canción para comenzar.").apply {
             setTextColor(gold)
         }
+
         content.addView(status)
 
         progress = ProgressBar(this).apply {
             visibility = View.GONE
         }
+
         content.addView(progress)
 
         selectButton = Button(this).apply {
             text = "♫  SELECCIONAR CANCIÓN"
             buttonStyle(this, 0xFF7438D9.toInt())
+
             setOnClickListener {
                 audioPicker.launch(arrayOf("audio/*"))
             }
         }
+
         content.addView(selectButton, params())
 
-        content.addView(label("ECUALIZADOR DE 10 BANDAS", 18f).apply {
-            setTextColor(cyan)
-        })
+        // ECUALIZADOR
+
+        addSection(content, "ECUALIZADOR DE 10 BANDAS")
 
         content.addView(label(
             "Ajusta graves, medios y agudos mientras escuchas.", 12f
@@ -286,9 +330,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+        // ASISTENTE DE ESTILO
+
         val assistantButton = Button(this).apply {
             text = "✦  AYUDARME A ELEGIR ESTILO"
             buttonStyle(this, 0xFFB02FAD.toInt())
+
             setOnClickListener {
                 recommendPreset()
             }
@@ -297,16 +344,150 @@ class MainActivity : ComponentActivity() {
         content.addView(assistantButton, params())
 
         content.addView(label(
-            "La sugerencia usa características básicas del sonido. " +
+            "La recomendación analiza características básicas del sonido. " +
                 "Es orientativa: no reconoce géneros con precisión ni separa la voz.",
             11f
         ).apply {
             setTextColor(0xFFD8C8F5.toInt())
         })
 
+        // CONTROLES INTELIGENTES
+
+        addSection(content, "SMART AUDIO CONTROLS")
+
+        content.addView(label(
+            "VOLUMEN DE SALIDA", 14f
+        ).apply {
+            setTextColor(gold)
+        })
+
+        volumeValue = label("100%", 20f).apply {
+            setTextColor(cyan)
+            paint.isFakeBoldText = true
+        }
+
+        content.addView(volumeValue)
+
+        volumeSlider = SeekBar(this).apply {
+            max = 120
+            progress = 100
+            progressTintList = android.content.res.ColorStateList.valueOf(cyan)
+            thumbTintList = android.content.res.ColorStateList.valueOf(cyan)
+
+            setOnSeekBarChangeListener(
+                object : SeekBar.OnSeekBarChangeListener {
+
+                    override fun onProgressChanged(
+                        seekBar: SeekBar?,
+                        value: Int,
+                        fromUser: Boolean
+                    ) {
+                        volumeValue.text = "$value%"
+                        updateEngine()
+                    }
+
+                    override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+
+                    override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                }
+            )
+        }
+
+        content.addView(volumeSlider, params())
+
+        content.addView(label(
+            "Puedes aumentar el volumen hasta 120%. El limitador ayuda a controlar los picos.",
+            11f
+        ).apply {
+            setTextColor(0xFFD8C8F5.toInt())
+        })
+
+        content.addView(label(
+            "CLARIDAD VOCAL", 14f
+        ).apply {
+            setTextColor(gold)
+        })
+
+        clarityValue = label("0%", 20f).apply {
+            setTextColor(pink)
+            paint.isFakeBoldText = true
+        }
+
+        content.addView(clarityValue)
+
+        claritySlider = SeekBar(this).apply {
+            max = 100
+            progress = 0
+            progressTintList = android.content.res.ColorStateList.valueOf(pink)
+            thumbTintList = android.content.res.ColorStateList.valueOf(pink)
+
+            setOnSeekBarChangeListener(
+                object : SeekBar.OnSeekBarChangeListener {
+
+                    override fun onProgressChanged(
+                        seekBar: SeekBar?,
+                        value: Int,
+                        fromUser: Boolean
+                    ) {
+                        clarityValue.text = "$value%"
+                        updateEngine()
+                    }
+
+                    override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+
+                    override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                }
+            )
+        }
+
+        content.addView(claritySlider, params())
+
+        content.addView(label(
+            "Aumenta la presencia de frecuencias que ayudan a destacar la voz. " +
+                "No separa voces de instrumentos.",
+            11f
+        ).apply {
+            setTextColor(0xFFD8C8F5.toInt())
+        })
+
+        // ANALIZADOR
+
+        addSection(content, "ANALIZADOR DE AUDIO")
+
+        analysisText = label(
+            "RMS: -- dB\n" +
+                "PICO: -- dB\n\n" +
+                "GRAVES: --%\n" +
+                "MEDIOS: --%\n" +
+                "AGUDOS: --%",
+            14f
+        ).apply {
+            gravity = Gravity.CENTER
+            setTextColor(gold)
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+
+            background = GradientDrawable().apply {
+                setColor(0xFF211438.toInt())
+                cornerRadius = dp(15).toFloat()
+                setStroke(dp(1), purple)
+            }
+        }
+
+        content.addView(analysisText, params())
+
+        content.addView(label(
+            "El análisis muestra la energía aproximada de cada zona de frecuencia.",
+            11f
+        ).apply {
+            setTextColor(0xFFD8C8F5.toInt())
+        })
+
+        // INTERRUPTORES
+
         bassSwitch = Switch(this).apply {
             text = "Refuerzo de graves"
             setTextColor(white)
+
             setOnCheckedChangeListener { _, _ ->
                 updateEngine()
             }
@@ -315,6 +496,7 @@ class MainActivity : ComponentActivity() {
         reverbSwitch = Switch(this).apply {
             text = "Reverberación"
             setTextColor(white)
+
             setOnCheckedChangeListener { _, _ ->
                 updateEngine()
             }
@@ -323,6 +505,7 @@ class MainActivity : ComponentActivity() {
         stereoSwitch = Switch(this).apply {
             text = "Amplitud estéreo"
             setTextColor(white)
+
             setOnCheckedChangeListener { _, _ ->
                 updateEngine()
             }
@@ -333,15 +516,18 @@ class MainActivity : ComponentActivity() {
         content.addView(stereoSwitch)
 
         content.addView(label(
-            "Mueve los controles mientras escuchas la canción.", 12f
+            "Los cambios se aplican durante la reproducción.", 12f
         ).apply {
             setTextColor(cyan)
         })
+
+        // REPRODUCCIÓN
 
         playButton = Button(this).apply {
             text = "▶  REPRODUCIR EN VIVO"
             isEnabled = false
             buttonStyle(this, 0xFF168A9D.toInt())
+
             setOnClickListener {
                 togglePlayback()
             }
@@ -349,10 +535,13 @@ class MainActivity : ComponentActivity() {
 
         content.addView(playButton, params())
 
+        // EXPORTACIÓN
+
         exportButton = Button(this).apply {
             text = "↓  EXPORTAR CANCIÓN WAV"
             isEnabled = false
             buttonStyle(this, 0xFF8C3FC7.toInt())
+
             setOnClickListener {
                 exportAudio()
             }
@@ -361,7 +550,7 @@ class MainActivity : ComponentActivity() {
         content.addView(exportButton, params())
 
         content.addView(label(
-            "I-A-M · Procesamiento local", 11f
+            "I-A-M · SMART AUDIO ENGINE · Procesamiento local", 11f
         ).apply {
             setTextColor(gold)
         })
@@ -382,7 +571,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // ------------------------------------------------
-    // NUEVA PANTALLA DE EXPORTACIÓN
+    // PANTALLA DE EXPORTACIÓN
     // ------------------------------------------------
 
     private fun showExportPage() {
@@ -431,13 +620,8 @@ class MainActivity : ComponentActivity() {
             paint.isFakeBoldText = true
         })
 
-        content.addView(label(
-            "Tu canción está preparada.", 15f
-        ))
-
-        content.addView(label(
-            "Escribe el nombre que quieres ponerle.", 14f
-        ))
+        content.addView(label("Tu canción está preparada.", 15f))
+        content.addView(label("Escribe el nombre que quieres ponerle.", 14f))
 
         content.addView(label(
             "NOMBRE DE LA CANCIÓN", 13f
@@ -503,11 +687,7 @@ class MainActivity : ComponentActivity() {
             }
         )
 
-        content.addView(label(
-            "Formato de audio: WAV", 14f
-        ).apply {
-            setTextColor(white)
-        })
+        content.addView(label("Formato de audio: WAV", 14f))
 
         content.addView(label(
             "La marca I-A-M se agrega automáticamente.", 12f
@@ -559,8 +739,6 @@ class MainActivity : ComponentActivity() {
         setContentView(page)
     }
 
-    // Crea el nombre sin repetir I-A-M ni .wav.
-
     private fun makeExportFileName(rawName: String): String {
 
         var name = rawName.trim()
@@ -588,19 +766,143 @@ class MainActivity : ComponentActivity() {
         return "$name-I-A-M.wav"
     }
 
-    private fun gains() =
+    // ------------------------------------------------
+    // CONTROLES DEL MOTOR
+    // ------------------------------------------------
+
+    private fun gains(): FloatArray =
         faders.map { it.value }.toFloatArray()
 
     private fun updateEngine() {
+
         val current = engine ?: return
 
         current.setGains(gains())
+
         current.bassEnabled = bassSwitch.isChecked
         current.reverbEnabled = reverbSwitch.isChecked
         current.stereoEnabled = stereoSwitch.isChecked
+
+        current.setVolume(volumeSlider.progress.toFloat())
+
+        current.setVocalClarityLevel(
+            claritySlider.progress.toFloat()
+        )
     }
 
+    // ------------------------------------------------
+    // ANALIZADOR BÁSICO
+    // ------------------------------------------------
+
+    private fun analyzeAudio(
+        samples: ShortArray,
+        channelCount: Int,
+        sampleRate: Int
+    ): AudioStats {
+
+        if (samples.isEmpty() || channelCount !in 1..2) {
+            return AudioStats(-120f, -120f, 0f, 0f, 0f)
+        }
+
+        val totalFrames = samples.size / channelCount
+
+        if (totalFrames <= 0) {
+            return AudioStats(-120f, -120f, 0f, 0f, 0f)
+        }
+
+        val stride = max(1, totalFrames / 300000)
+
+        val lowAlpha = 1.0 - exp(-2.0 * PI * 250.0 / sampleRate)
+        val highAlpha = 1.0 - exp(-2.0 * PI * 4000.0 / sampleRate)
+
+        var lowState = 0.0
+        var highState = 0.0
+
+        var totalEnergy = 0.0
+        var lowEnergy = 0.0
+        var midEnergy = 0.0
+        var highEnergy = 0.0
+
+        var peak = 0.0
+        var count = 0
+
+        for (frame in 0 until totalFrames step stride) {
+
+            val index = frame * channelCount
+
+            var value = 0.0
+
+            for (channel in 0 until channelCount) {
+                value += samples[index + channel].toDouble() / 32768.0
+            }
+
+            value /= channelCount
+
+            val absolute = abs(value)
+            peak = max(peak, absolute)
+
+            lowState += lowAlpha * (value - lowState)
+            highState += highAlpha * (value - highState)
+
+            val low = lowState
+            val high = highState - lowState
+            val top = value - highState
+
+            totalEnergy += value * value
+            lowEnergy += low * low
+            midEnergy += high * high
+            highEnergy += top * top
+
+            count++
+        }
+
+        val rms = sqrt(totalEnergy / count.coerceAtLeast(1))
+
+        fun db(value: Double): Float {
+            return (20.0 * log10(value.coerceAtLeast(0.000001)))
+                .toFloat()
+                .coerceIn(-120f, 0f)
+        }
+
+        val sum = lowEnergy + midEnergy + highEnergy
+
+        val lowPercent = if (sum > 0.0) {
+            (lowEnergy / sum * 100.0).toFloat()
+        } else 0f
+
+        val midPercent = if (sum > 0.0) {
+            (midEnergy / sum * 100.0).toFloat()
+        } else 0f
+
+        val highPercent = if (sum > 0.0) {
+            (highEnergy / sum * 100.0).toFloat()
+        } else 0f
+
+        return AudioStats(
+            db(rms),
+            db(peak),
+            lowPercent,
+            midPercent,
+            highPercent
+        )
+    }
+
+    private fun showAnalysis(stats: AudioStats) {
+
+        analysisText.text =
+            "RMS: ${"%.1f".format(stats.rmsDb)} dB\n" +
+            "PICO: ${"%.1f".format(stats.peakDb)} dB\n\n" +
+            "GRAVES: ${stats.lowPercent.roundToInt()}%\n" +
+            "MEDIOS: ${stats.midPercent.roundToInt()}%\n" +
+            "AGUDOS: ${stats.highPercent.roundToInt()}%"
+    }
+
+    // ------------------------------------------------
+    // RECOMENDACIÓN DE ESTILO
+    // ------------------------------------------------
+
     private fun recommendPreset() {
+
         val samples = audio
 
         if (samples == null) {
@@ -608,31 +910,13 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        val step = max(1, samples.size / 20000)
-        var crossings = 0
-        var count = 0
-        var previous = 0
-
-        for (i in samples.indices step step) {
-            val current = samples[i].toInt()
-
-            if (count > 0 &&
-                ((previous < 0 && current >= 0) ||
-                 (previous >= 0 && current < 0))
-            ) {
-                crossings++
-            }
-
-            previous = current
-            count++
-        }
-
-        val ratio = crossings.toFloat() / count.coerceAtLeast(1)
+        val stats = analyzeAudio(samples, channels, rate)
 
         val recommendation = when {
-            ratio > 0.12f -> "K-pop · Voz"
-            ratio < 0.055f -> "Cumbia · Voz"
-            else -> "VOZ CLARA"
+            stats.lowPercent > 48f -> "Hip Hop"
+            stats.highPercent > 42f -> "Acústica"
+            stats.midPercent > 45f -> "VOZ CLARA"
+            else -> "Pop"
         }
 
         val position = presets.keys.indexOf(recommendation)
@@ -641,48 +925,72 @@ class MainActivity : ComponentActivity() {
             presetSpinner.setSelection(position)
         }
 
-        status.text = "Sugerencia: $recommendation"
-        message("Sugerencia orientativa: $recommendation. Escucha y decide.")
+        status.text = "Sugerencia orientativa: $recommendation"
+
+        message(
+            "I-A-M recomienda $recommendation. " +
+                "Escucha el resultado y decide."
+        )
     }
 
+    // ------------------------------------------------
+    // REPRODUCCIÓN EN VIVO
+    // ------------------------------------------------
+
     private fun togglePlayback() {
+
         val samples = audio
             ?: return message("Selecciona una canción primero.")
 
         if (engine?.isPlaying() == true) {
+
             engine?.stop()
+
             playButton.text = "▶  REPRODUCIR EN VIVO"
             status.text = "Reproducción detenida."
+
             return
         }
 
         try {
+
             engine?.stop()
 
             val newEngine = LiveAudioEngine(rate, channels, samples)
 
             newEngine.setGains(gains())
+
             newEngine.bassEnabled = bassSwitch.isChecked
             newEngine.reverbEnabled = reverbSwitch.isChecked
             newEngine.stereoEnabled = stereoSwitch.isChecked
+
+            newEngine.setVolume(volumeSlider.progress.toFloat())
+
+            newEngine.setVocalClarityLevel(
+                claritySlider.progress.toFloat()
+            )
 
             engine = newEngine
 
             newEngine.start()
 
             playButton.text = "■  DETENER REPRODUCCIÓN"
-            status.text = "Reproduciendo. Ajusta el ecualizador."
+            status.text = "Reproduciendo. Ajusta los controles en vivo."
 
             watchPlayback()
 
         } catch (e: Exception) {
+
             engine = null
+
             playButton.text = "▶  REPRODUCIR EN VIVO"
+
             message(e.message ?: "No se pudo reproducir.")
         }
     }
 
     private fun watchPlayback() {
+
         handler.postDelayed({
 
             if (engine?.isPlaying() != true) {
@@ -695,6 +1003,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stopPlayback() {
+
         engine?.stop()
         engine = null
 
@@ -703,7 +1012,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ------------------------------------------------
+    // CARGA DE AUDIO
+    // ------------------------------------------------
+
     private fun loadAudio(uri: Uri) {
+
         stopPlayback()
 
         audio = null
@@ -713,16 +1027,27 @@ class MainActivity : ComponentActivity() {
         exportButton.isEnabled = false
 
         progress.visibility = View.VISIBLE
-        status.text = "Cargando canción..."
+        status.text = "Cargando y analizando canción..."
 
         Thread {
+
             try {
+
                 val decoded = decode(uri)
 
+                val stats = analyzeAudio(
+                    decoded.samples,
+                    decoded.channelCount,
+                    decoded.sampleRate
+                )
+
                 handler.post {
+
                     audio = decoded.samples
                     rate = decoded.sampleRate
                     channels = decoded.channelCount
+
+                    showAnalysis(stats)
 
                     progress.visibility = View.GONE
 
@@ -730,15 +1055,17 @@ class MainActivity : ComponentActivity() {
                     playButton.isEnabled = true
                     exportButton.isEnabled = true
 
-                    status.text = "Canción lista. Pulsa reproducir."
+                    status.text = "Canción lista. Análisis completado."
 
-                    message("Audio cargado correctamente.")
+                    message("Audio cargado y analizado correctamente.")
                 }
 
             } catch (e: Exception) {
 
                 handler.post {
+
                     progress.visibility = View.GONE
+
                     selectButton.isEnabled = true
 
                     status.text = "Error al cargar canción."
@@ -750,17 +1077,24 @@ class MainActivity : ComponentActivity() {
         }.start()
     }
 
+    // ------------------------------------------------
+    // DECODIFICADOR
+    // ------------------------------------------------
+
     private fun decode(uri: Uri): Decoded {
+
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
 
         try {
+
             extractor.setDataSource(this, uri, null)
 
             var track = -1
             var format: MediaFormat? = null
 
             for (i in 0 until extractor.trackCount) {
+
                 val candidate = extractor.getTrackFormat(i)
 
                 if ((candidate.getString(MediaFormat.KEY_MIME) ?: "")
@@ -782,6 +1116,7 @@ class MainActivity : ComponentActivity() {
                 ?: throw Exception("Formato desconocido.")
 
             codec = MediaCodec.createDecoderByType(mime)
+
             codec.configure(format, null, null, 0)
             codec.start()
 
@@ -799,9 +1134,11 @@ class MainActivity : ComponentActivity() {
             while (!outputDone) {
 
                 if (!inputDone) {
+
                     val index = codec.dequeueInputBuffer(10000)
 
                     if (index >= 0) {
+
                         val input = codec.getInputBuffer(index)
                             ?: throw Exception("Error leyendo audio.")
 
@@ -810,13 +1147,19 @@ class MainActivity : ComponentActivity() {
                         val size = extractor.readSampleData(input, 0)
 
                         if (size < 0) {
+
                             codec.queueInputBuffer(
-                                index, 0, 0, 0,
+                                index,
+                                0,
+                                0,
+                                0,
                                 MediaCodec.BUFFER_FLAG_END_OF_STREAM
                             )
+
                             inputDone = true
 
                         } else {
+
                             codec.queueInputBuffer(
                                 index,
                                 0,
@@ -904,24 +1247,42 @@ class MainActivity : ComponentActivity() {
 
             val samples = when (encoding) {
 
-                AudioFormat.ENCODING_PCM_16BIT ->
+                AudioFormat.ENCODING_PCM_16BIT -> {
+
+                    if (bytes.size % 2 != 0) {
+                        throw Exception("Audio PCM incompleto.")
+                    }
+
                     ShortArray(bytes.size / 2) {
                         buffer.short
                     }
+                }
 
-                AudioFormat.ENCODING_PCM_FLOAT ->
+                AudioFormat.ENCODING_PCM_FLOAT -> {
+
+                    if (bytes.size % 4 != 0) {
+                        throw Exception("Audio PCM incompleto.")
+                    }
+
                     ShortArray(bytes.size / 4) {
                         (buffer.float.coerceIn(-1f, 1f) * 32767f)
                             .toInt().toShort()
                     }
+                }
 
-                AudioFormat.ENCODING_PCM_8BIT ->
+                AudioFormat.ENCODING_PCM_8BIT -> {
+
                     ShortArray(bytes.size) {
                         (((bytes[it].toInt() and 255) - 128) shl 8)
                             .toShort()
                     }
+                }
 
                 else -> throw Exception("PCM no compatible.")
+            }
+
+            if (samples.isEmpty() || samples.size % ch != 0) {
+                throw Exception("La canción no contiene audio válido.")
             }
 
             return Decoded(samples, sr, ch)
@@ -940,6 +1301,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ------------------------------------------------
+    // FILTROS DIGITALES
+    // ------------------------------------------------
+
     private data class Filter(
         val b0: Double,
         val b1: Double,
@@ -947,12 +1312,14 @@ class MainActivity : ComponentActivity() {
         val a1: Double,
         val a2: Double
     ) {
+
         var x1 = 0.0
         var x2 = 0.0
         var y1 = 0.0
         var y2 = 0.0
 
         fun process(x: Double): Double {
+
             val y = b0*x + b1*x1 + b2*x2 - a1*y1 - a2*y2
 
             x2 = x1
@@ -989,6 +1356,10 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    // ------------------------------------------------
+    // PROCESAMIENTO PARA EXPORTACIÓN
+    // ------------------------------------------------
+
     private fun applyEffects(
         input: ShortArray,
         sr: Int,
@@ -996,7 +1367,9 @@ class MainActivity : ComponentActivity() {
         values: FloatArray,
         bass: Boolean,
         reverb: Boolean,
-        stereo: Boolean
+        stereo: Boolean,
+        volumePercent: Int,
+        clarityPercent: Int
     ): ShortArray {
 
         val hz = doubleArrayOf(
@@ -1018,6 +1391,15 @@ class MainActivity : ComponentActivity() {
             }
         } else null
 
+        val clarity = clarityPercent.coerceIn(0, 100) / 100.0
+
+        val clarityFilters = Array(ch) {
+            listOfNotNull(
+                makeFilter(2800.0, 3.5 * clarity, sr.toDouble()),
+                makeFilter(5200.0, 1.5 * clarity, sr.toDouble())
+            )
+        }
+
         val delayFrames = (sr * 0.22).toInt().coerceAtLeast(1)
 
         val delay = if (reverb) {
@@ -1027,6 +1409,13 @@ class MainActivity : ComponentActivity() {
         var delayPos = 0
 
         val output = ShortArray(input.size)
+
+        val volume = volumePercent.coerceIn(0, 120) / 100.0
+
+        var limiterEnvelope = 0.0
+
+        val attack = 0.01
+        val release = 0.0005
 
         for (frame in input.indices step ch) {
 
@@ -1046,6 +1435,10 @@ class MainActivity : ComponentActivity() {
                 left = it.process(left)
             }
 
+            clarityFilters[0].forEach {
+                left = it.process(left)
+            }
+
             if (ch == 2) {
 
                 for (filter in filters[1]) {
@@ -1055,9 +1448,14 @@ class MainActivity : ComponentActivity() {
                 bassFilters?.get(1)?.forEach {
                     right = it.process(right)
                 }
+
+                clarityFilters[1].forEach {
+                    right = it.process(right)
+                }
             }
 
             if (stereo && ch == 2) {
+
                 val mid = (left + right) * 0.5
                 val side = (left - right) * 0.5 * 1.25
 
@@ -1075,6 +1473,7 @@ class MainActivity : ComponentActivity() {
                 left += oldLeft * 0.22
 
                 if (ch == 2) {
+
                     val oldRight = delay[index + 1]
 
                     delay[index + 1] = right + oldRight * 0.28
@@ -1084,8 +1483,25 @@ class MainActivity : ComponentActivity() {
                 delayPos = (delayPos + 1) % delayFrames
             }
 
-            left /= 1.0 + abs(left) * 0.35
-            right /= 1.0 + abs(right) * 0.35
+            left *= volume
+            right *= volume
+
+            val peak = max(abs(left), abs(right))
+
+            if (peak > limiterEnvelope) {
+                limiterEnvelope += (peak - limiterEnvelope) * attack
+            } else {
+                limiterEnvelope += (peak - limiterEnvelope) * release
+            }
+
+            val limiterGain = if (limiterEnvelope > 0.94) {
+                0.94 / limiterEnvelope
+            } else {
+                1.0
+            }
+
+            left *= limiterGain
+            right *= limiterGain
 
             output[frame] =
                 (left * 32767.0).roundToInt()
@@ -1100,6 +1516,10 @@ class MainActivity : ComponentActivity() {
 
         return output
     }
+
+    // ------------------------------------------------
+    // CREAR WAV
+    // ------------------------------------------------
 
     private fun wav(
         samples: ShortArray,
@@ -1139,7 +1559,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // ------------------------------------------------
-    // EXPORTACIÓN: AHORA ABRE LA NUEVA PANTALLA
+    // EXPORTACIÓN
     // ------------------------------------------------
 
     private fun exportAudio() {
@@ -1154,12 +1574,16 @@ class MainActivity : ComponentActivity() {
         val reverb = reverbSwitch.isChecked
         val stereo = stereoSwitch.isChecked
 
+        val volume = volumeSlider.progress
+        val clarity = claritySlider.progress
+
         exportButton.isEnabled = false
         progress.visibility = View.VISIBLE
 
-        status.text = "Preparando WAV..."
+        status.text = "I-A-M está procesando tu canción..."
 
         Thread {
+
             try {
 
                 val result = applyEffects(
@@ -1169,7 +1593,9 @@ class MainActivity : ComponentActivity() {
                     values,
                     bass,
                     reverb,
-                    stereo
+                    stereo,
+                    volume,
+                    clarity
                 )
 
                 val resultWav = wav(result, sr, ch)
@@ -1218,6 +1644,7 @@ class MainActivity : ComponentActivity() {
             message("¡Canción guardada correctamente con el nombre I-A-M!")
 
             setContentView(mainScreen)
+
             status.text = "WAV exportado correctamente."
 
         } catch (e: Exception) {
@@ -1227,6 +1654,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun message(text: String) {
+
         Toast.makeText(
             this,
             text,
@@ -1235,11 +1663,18 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+
         handler.removeCallbacksAndMessages(null)
+
         stopPlayback()
+
         super.onDestroy()
     }
 }
+
+// ------------------------------------------------
+// CONTROL VERTICAL DEL ECUALIZADOR
+// ------------------------------------------------
 
 class VerticalFader(context: android.content.Context) : View(context) {
 
@@ -1270,6 +1705,7 @@ class VerticalFader(context: android.content.Context) : View(context) {
     }
 
     override fun onDraw(canvas: Canvas) {
+
         super.onDraw(canvas)
 
         activePaint.color = accentColor
