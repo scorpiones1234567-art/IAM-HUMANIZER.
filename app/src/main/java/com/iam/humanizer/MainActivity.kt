@@ -1495,58 +1495,72 @@ private var pendingExportTitle = "Cancion"
 
     // GUARDAR MP3
 
-    private fun saveMp3(uri: Uri) {
+    // GUARDAR MP3
 
-        val samples = pendingProcessedAudio ?: return
-        val sr = rate
-        val ch = channels
-        val cover = pendingCoverJpeg
-        val title = makeExportFileName(
-            exportNameInput.text.toString(), "mp3"
-        ).removeSuffix(".mp3")
+private fun saveMp3(uri: Uri) {
 
-        pendingExportTitle = title
+    val samples = pendingProcessedAudio ?: return
+    val sr = rate
+    val ch = channels
+    val cover = pendingCoverJpeg
 
-        progress.visibility = View.VISIBLE
-        message("I-A-M está creando el MP3. Espera un momento.")
+    val title = makeExportFileName(
+        exportNameInput.text.toString(),
+        "mp3"
+    ).removeSuffix(".mp3")
 
-        Thread {
-            var tempFile: File? = null
+    pendingExportTitle = title
 
-            try {
-                tempFile = Mp3Exporter.export(
-                    this,
-                    samples,
-                    sr,
-                    ch,
-                    title,
-                    cover
-                )
+    progress.visibility = View.VISIBLE
+    message("I-A-M está creando el MP3. Espera un momento.")
 
-                contentResolver.openOutputStream(uri)?.use { output ->
-                    tempFile.inputStream().use { input ->
-                        input.copyTo(output)
-                    }
-                    output.flush()
-                } ?: throw Exception("No se pudo guardar el MP3.")
+    Thread {
+        var tempFile: File? = null
 
-                tempFile.delete()
+        try {
 
-                handler.post {
-                    progress.visibility = View.GONE
-                    message("¡MP3 exportado correctamente con I-A-M!")
-                    finishExport()
+            val generatedFile = Mp3Exporter.export(
+                this,
+                samples,
+                sr,
+                ch,
+                title,
+                cover
+            )
+
+            tempFile = generatedFile
+
+            contentResolver.openOutputStream(uri)?.use { output ->
+
+                generatedFile.inputStream().use { input ->
+                    input.copyTo(output)
                 }
 
-            } catch (e: Exception) {
-                tempFile?.delete()
-                handler.post {
-                    progress.visibility = View.GONE
-                    message(e.message ?: "Error creando el MP3.")
-                }
+                output.flush()
+
+            } ?: throw Exception("No se pudo guardar el MP3.")
+
+            generatedFile.delete()
+            tempFile = null
+
+            handler.post {
+                progress.visibility = View.GONE
+                message("¡MP3 exportado correctamente con I-A-M!")
+                finishExport()
             }
-        }.start()
-    }
+
+        } catch (e: Exception) {
+
+            tempFile?.delete()
+
+            handler.post {
+                progress.visibility = View.GONE
+                message(e.message ?: "Error creando el MP3.")
+            }
+        }
+
+    }.start()
+}
 
     // GUARDAR CARÁTULA INDEPENDIENTE PARA WAV
 
