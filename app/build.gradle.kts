@@ -12,8 +12,8 @@ android {
         applicationId = "com.iam.humanizer"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     compileOptions {
@@ -28,4 +28,10 @@ android {
 
 dependencies {
     implementation("androidx.activity:activity-ktx:1.10.1")
+
+    // Codificador de audio MP3
+    implementation("net.qiujuer.lame:lame:1.0.0")
+
+    // Carátulas y metadatos ID3 para MP3
+    implementation("com.mpatric:mp3agic:0.9.1")
 }
