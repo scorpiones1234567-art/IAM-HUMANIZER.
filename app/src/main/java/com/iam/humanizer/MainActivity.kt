@@ -61,8 +61,9 @@ class MainActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
 
     private var pendingProcessedAudio: ShortArray? = null
-    private var pendingCoverJpeg: ByteArray? = null
-    private var pendingExportTitle = "Cancion"
+private var pendingCoverJpeg: ByteArray? = null
+private var pendingCoverSave = false
+private var pendingExportTitle = "Cancion"
 
     private val cyan = 0xFF36E5FF.toInt()
     private val pink = 0xFFFF4FCB.toInt()
