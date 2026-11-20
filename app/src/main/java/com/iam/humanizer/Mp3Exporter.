@@ -1,0 +1,137 @@
+package com.iam.humanizer
+
+import android.content.Context
+import com.mpatric.mp3agic.ID3v24Tag
+import com.mpatric.mp3agic.Mp3File
+import net.qiujuer.lame.Lame
+import net.qiujuer.lame.LameOutputStream
+import java.io.File
+import java.io.FileOutputStream
+
+object Mp3Exporter {
+
+    fun export(
+        context: Context,
+        samples: ShortArray,
+        sampleRate: Int,
+        channels: Int,
+        title: String,
+        coverJpeg: ByteArray?
+    ): File {
+
+        require(samples.isNotEmpty()) {
+            "No hay audio para exportar."
+        }
+
+        require(channels in 1..2) {
+            "El número de canales no es compatible."
+        }
+
+        require(samples.size % channels == 0) {
+            "Los datos de audio están incompletos."
+        }
+
+        val outputRate = minOf(sampleRate, 44100)
+
+        val rawFile = File(context.cacheDir, "iam_temp_raw.mp3")
+        val finalFile = File(context.cacheDir, "iam_temp_final.mp3")
+
+        rawFile.delete()
+        finalFile.delete()
+
+        val model = if (channels == 1) {
+            Lame.LameModel.MONO
+        } else {
+            Lame.LameModel.JOINT_STEREO
+        }
+
+        val lame = Lame(
+            sampleRate,
+            channels,
+            outputRate,
+            192,
+            model,
+            Lame.LameQuality.GOOD
+        )
+
+        val stream = LameOutputStream(
+            lame,
+            FileOutputStream(rawFile),
+            8192
+        )
+
+        try {
+
+            var offset = 0
+
+            while (offset < samples.size) {
+
+                var length = minOf(
+                    8192,
+                    samples.size - offset
+                )
+
+                if (channels == 2 && length % 2 != 0) {
+                    length--
+                }
+
+                if (length <= 0) break
+
+                val chunk = samples.copyOfRange(
+                    offset,
+                    offset + length
+                )
+
+                stream.write(chunk, chunk.size)
+
+                offset += length
+            }
+
+            stream.close()
+
+        } catch (e: Exception) {
+
+            try {
+                stream.close()
+            } catch (_: Exception) {}
+
+            rawFile.delete()
+
+            throw e
+        }
+
+        try {
+
+            val mp3 = Mp3File(rawFile.absolutePath)
+
+            val tag = ID3v24Tag()
+
+            tag.setTitle(title)
+            tag.setArtist("I-A-M")
+            tag.setAlbum("I-A-M Smart Audio Engine")
+            tag.setEncoder("I-A-M")
+
+            if (coverJpeg != null && coverJpeg.isNotEmpty()) {
+                tag.setAlbumImage(
+                    coverJpeg,
+                    "image/jpeg"
+                )
+            }
+
+            mp3.setId3v2Tag(tag)
+
+            mp3.save(finalFile.absolutePath)
+
+            rawFile.delete()
+
+            return finalFile
+
+        } catch (e: Exception) {
+
+            rawFile.delete()
+            finalFile.delete()
+
+            throw e
+        }
+    }
+}
