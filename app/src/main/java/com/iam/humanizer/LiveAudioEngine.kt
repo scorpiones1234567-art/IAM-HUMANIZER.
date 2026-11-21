@@ -99,8 +99,8 @@ class LiveAudioEngine(
         vocalClarity = percent.coerceIn(0f, 100f)
     }
 
-    fun setNoiseReduction(percent: Float) {
-        noiseReduction = percent.coerceIn(0f, 100f)
+    fun setNoiseReductionLevel(percent: Float) {
+    noiseReduction = percent.coerceIn(0f, 100f)
     }
 
     private fun updateAnalysis(input: ShortArray) {
