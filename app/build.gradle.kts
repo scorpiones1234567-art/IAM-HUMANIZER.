@@ -10,7 +10,7 @@ android {
 
     defaultConfig {
         applicationId = "com.iam.humanizer"
-        minSdk = 26
+        minSdk = 29
         targetSdk = 35
         versionCode = 2
         versionName = "1.1"
@@ -33,9 +33,9 @@ dependencies {
     implementation("net.qiujuer.lame:lame:1.0.0")
     implementation("com.mpatric:mp3agic:0.9.1")
 
-    // Motor ONNX para futuras funciones de IA
+    // Motor ONNX
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.32.0")
 
-    // IA DeepFilterNet: limpieza de ruido sin conexión
+    // IA DeepFilterNet
     implementation("io.github.kaleyravideo:android-deepfilternet:0.0.8")
 }
