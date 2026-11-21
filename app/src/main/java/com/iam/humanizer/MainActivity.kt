@@ -1262,6 +1262,9 @@ private var pendingExportTitle = "Cancion"
 
     // PROCESAMIENTO PARA EXPORTACIÓN
 
+    
+    // PROCESAMIENTO COMPARTIDO PARA EXPORTACIÓN WAV Y MP3
+
     private fun applyEffects(
         input: ShortArray,
         sr: Int,
@@ -1274,106 +1277,60 @@ private var pendingExportTitle = "Cancion"
         clarityPercent: Int
     ): ShortArray {
 
-        val hz = doubleArrayOf(
-            31.0,62.0,125.0,250.0,500.0,
-            1000.0,2000.0,4000.0,8000.0,16000.0
+        require(ch in 1..2) {
+            "Canales de audio no compatibles."
+        }
+
+        require(input.size % ch == 0) {
+            "El audio está incompleto."
+        }
+
+        val processor = AudioProcessor(
+            sampleRate = sr,
+            channels = ch,
+            settings = AudioProcessor.Settings(
+                equalizer = values.copyOf(),
+                bassEnabled = bass,
+                reverbEnabled = reverb,
+                stereoEnabled = stereo,
+                volumePercent = volumePercent,
+                vocalClarity = clarityPercent
+            )
         )
 
-        val filters = Array(ch) {
-            hz.indices.mapNotNull {
-                makeFilter(hz[it], values[it].toDouble(), sr.toDouble())
-            }
-        }
-
-        val bassFilters = if (bass) {
-            Array(ch) {
-                listOfNotNull(makeFilter(90.0, 4.0, sr.toDouble()))
-            }
-        } else null
-
-        val clarity = clarityPercent.coerceIn(0, 100) / 100.0
-
-        val clarityFilters = Array(ch) {
-            listOfNotNull(
-                makeFilter(2800.0, 3.5 * clarity, sr.toDouble()),
-                makeFilter(5200.0, 1.5 * clarity, sr.toDouble())
-            )
-        }
-
-        val delayFrames = (sr * 0.22).toInt().coerceAtLeast(1)
-        val delay = if (reverb) DoubleArray(delayFrames * ch) else null
-
-        var delayPos = 0
         val output = ShortArray(input.size)
-        val volume = volumePercent.coerceIn(0, 120) / 100.0
-        var limiterEnvelope = 0.0
 
-        for (frame in input.indices step ch) {
+        // Procesamiento por bloques para conservar
+        // el estado de filtros, reverberación y limitador.
+        val blockSize = 8192 - (8192 % ch)
 
-            var left = input[frame].toDouble() / 32768.0
-            var right = if (ch == 2) {
-                input[frame + 1].toDouble() / 32768.0
-            } else left
+        var offset = 0
 
-            for (filter in filters[0]) left = filter.process(left)
-            bassFilters?.get(0)?.forEach { left = it.process(left) }
-            clarityFilters[0].forEach { left = it.process(left) }
+        while (offset < input.size) {
 
-            if (ch == 2) {
-                for (filter in filters[1]) right = filter.process(right)
-                bassFilters?.get(1)?.forEach { right = it.process(right) }
-                clarityFilters[1].forEach { right = it.process(right) }
-            }
+            val count = minOf(
+                blockSize,
+                input.size - offset
+            )
 
-            if (stereo && ch == 2) {
-                val mid = (left + right) * 0.5
-                val side = (left - right) * 0.5 * 1.25
-                left = mid + side
-                right = mid - side
-            }
+            val block = input.copyOfRange(
+                offset,
+                offset + count
+            )
 
-            if (delay != null) {
-                val index = delayPos * ch
-                val oldLeft = delay[index]
-                delay[index] = left + oldLeft * 0.28
-                left += oldLeft * 0.22
+            val processed = processor.process(block)
 
-                if (ch == 2) {
-                    val oldRight = delay[index + 1]
-                    delay[index + 1] = right + oldRight * 0.28
-                    right += oldRight * 0.22
-                }
+            processed.copyInto(
+                destination = output,
+                destinationOffset = offset
+            )
 
-                delayPos = (delayPos + 1) % delayFrames
-            }
-
-            left *= volume
-            right *= volume
-
-            val peak = max(abs(left), abs(right))
-            val coefficient = if (peak > limiterEnvelope) 0.01 else 0.0005
-            limiterEnvelope += (peak - limiterEnvelope) * coefficient
-
-            val limiterGain = if (limiterEnvelope > 0.94) {
-                0.94 / limiterEnvelope
-            } else 1.0
-
-            left *= limiterGain
-            right *= limiterGain
-
-            output[frame] =
-                (left * 32767.0).roundToInt()
-                    .coerceIn(-32768, 32767).toShort()
-
-            if (ch == 2) {
-                output[frame + 1] =
-                    (right * 32767.0).roundToInt()
-                        .coerceIn(-32768, 32767).toShort()
-            }
+            offset += count
         }
 
         return output
     }
+
 
     // CREAR WAV
 
