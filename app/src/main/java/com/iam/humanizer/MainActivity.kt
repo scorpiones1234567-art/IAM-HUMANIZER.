@@ -1,4 +1,3 @@
-
 package com.iam.humanizer
 
 import android.graphics.Canvas
@@ -31,6 +30,7 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var status: TextView
     private lateinit var selectButton: Button
+    private lateinit var aiButton: Button
     private lateinit var playButton: Button
     private lateinit var exportButton: Button
     private lateinit var progress: ProgressBar
@@ -41,7 +41,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var humSwitch: Switch
     private lateinit var presetSpinner: Spinner
 
-    // Ahora el ecualizador utiliza perillas giratorias.
     private lateinit var faders: List<AudioControl>
 
     private lateinit var volumeSlider: SeekBar
@@ -56,6 +55,17 @@ class MainActivity : ComponentActivity() {
     private lateinit var coverStatus: TextView
 
     private var audio: ShortArray? = null
+
+    // Resultado de Demucs + DeepFilterNet.
+    // La salida de la tubería es PCM 16 bits, estéreo, 44.1 kHz.
+    private var aiProcessedAudio: ShortArray? = null
+    private var aiRate = 44100
+    private var aiChannels = 2
+
+    // Formato del audio que se está preparando para exportar.
+    private var pendingExportRate = 44100
+    private var pendingExportChannels = 2
+
     private var rate = 44100
     private var channels = 2
 
@@ -266,7 +276,6 @@ class MainActivity : ComponentActivity() {
         presetSpinner.adapter = adapter
         content.addView(presetSpinner, params())
 
-        // Fila horizontal desplazable para las diez perillas.
         val knobRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -318,7 +327,6 @@ class MainActivity : ComponentActivity() {
                 suffix = " dB"
             )
 
-            // Cada cambio de perilla actualiza el ecualizador del motor.
             control.onValueChanged = {
                 updateEngine()
             }
@@ -532,6 +540,25 @@ class MainActivity : ComponentActivity() {
             12f
         ).apply {
             setTextColor(cyan)
+        })
+
+        // NUEVO: procesamiento neuronal real.
+        aiButton = Button(this).apply {
+            text = "✦  PROCESAR VOZ CON IA"
+            isEnabled = false
+            buttonStyle(this, 0xFF7438D9.toInt())
+            setOnClickListener {
+                processWithAI()
+            }
+        }
+        content.addView(aiButton, params())
+
+        content.addView(label(
+            "Demucs separa voz e instrumentos. DeepFilterNet limpia la pista vocal " +
+                "y después I-A-M vuelve a mezclar las pistas. La primera vez descarga el modelo.",
+            11f
+        ).apply {
+            setTextColor(0xFFD8C8F5.toInt())
         })
 
         playButton = Button(this).apply {
@@ -977,11 +1004,127 @@ class MainActivity : ComponentActivity() {
         message("I-A-M recomienda $recommendation. Escucha el resultado y decide.")
     }
 
+    // LA SEGUNDA PARTE CONTINÚA AQUÍ.
+        // PROCESAMIENTO NEURONAL DEMUCS + DEEPFILTERNET
+
+    private fun processWithAI() {
+
+        val source = audio
+            ?: return message("Primero selecciona una canción.")
+
+        if (aiProcessedAudio != null) {
+            message("Esta canción ya fue procesada con IA. Puedes reproducirla o exportarla.")
+            return
+        }
+
+        stopPlayback()
+
+        val originalRate = rate
+        val originalChannels = channels
+
+        aiButton.isEnabled = false
+        selectButton.isEnabled = false
+        playButton.isEnabled = false
+        exportButton.isEnabled = false
+
+        progress.visibility = View.VISIBLE
+        progress.isIndeterminate = false
+        progress.max = 100
+        progress.progress = 0
+
+        status.text = "I-A-M está preparando los motores neuronales..."
+
+        Thread {
+            try {
+
+                val result = DemucsVoicePipeline.process(
+                    context = applicationContext,
+                    input = source,
+                    sampleRate = originalRate,
+                    channels = originalChannels,
+                    attenuationDb = 50f,
+                    onProgress = { percent, stage ->
+
+                        handler.post {
+                            if (!isFinishing && !isDestroyed) {
+                                progress.progress =
+                                    percent.coerceIn(0, 100)
+
+                                status.text =
+                                    "IA ${percent.coerceIn(0, 100)}% · $stage"
+                            }
+                        }
+                    }
+                )
+
+                check(result.isNotEmpty()) {
+                    "La IA no generó audio."
+                }
+
+                check(result.size % 2 == 0) {
+                    "La mezcla final no tiene formato estéreo válido."
+                }
+
+                handler.post {
+
+                    aiProcessedAudio = result
+                    aiRate = 44100
+                    aiChannels = 2
+
+                    progress.visibility = View.GONE
+                    progress.isIndeterminate = true
+
+                    aiButton.isEnabled = true
+                    aiButton.text = "✓  VOZ PROCESADA CON IA"
+
+                    selectButton.isEnabled = true
+                    playButton.isEnabled = true
+                    exportButton.isEnabled = true
+
+                    status.text =
+                        "IA terminada: voz limpia e instrumentos mezclados."
+
+                    val stats = analyzeAudio(
+                        result,
+                        aiChannels,
+                        aiRate
+                    )
+
+                    showAnalysis(stats)
+
+                    message(
+                        "¡Procesamiento neuronal terminado! " +
+                            "Demucs separó las pistas y DeepFilterNet limpió la voz."
+                    )
+                }
+
+            } catch (e: Exception) {
+
+                handler.post {
+
+                    progress.visibility = View.GONE
+                    progress.isIndeterminate = true
+
+                    aiButton.isEnabled = true
+                    selectButton.isEnabled = true
+                    playButton.isEnabled = true
+                    exportButton.isEnabled = true
+
+                    status.text = "No se pudo completar el procesamiento IA."
+
+                    message(
+                        e.message ?: "Error durante el procesamiento neuronal."
+                    )
+                }
+            }
+        }.start()
+    }
+
     // REPRODUCCIÓN EN VIVO
 
     private fun togglePlayback() {
 
-        val samples = audio
+        val samples = aiProcessedAudio ?: audio
             ?: return message("Selecciona una canción primero.")
 
         if (engine?.isPlaying() == true) {
@@ -994,7 +1137,17 @@ class MainActivity : ComponentActivity() {
         try {
             engine?.stop()
 
-            val newEngine = LiveAudioEngine(rate, channels, samples)
+            val playbackRate =
+                if (aiProcessedAudio != null) aiRate else rate
+
+            val playbackChannels =
+                if (aiProcessedAudio != null) aiChannels else channels
+
+            val newEngine = LiveAudioEngine(
+                playbackRate,
+                playbackChannels,
+                samples
+            )
 
             newEngine.setGains(gains())
             newEngine.bassEnabled = bassSwitch.isChecked
@@ -1008,7 +1161,13 @@ class MainActivity : ComponentActivity() {
             newEngine.start()
 
             playButton.text = "■  DETENER REPRODUCCIÓN"
-            status.text = "Reproduciendo. Ajusta los controles en vivo."
+
+            status.text =
+                if (aiProcessedAudio != null) {
+                    "Reproduciendo mezcla procesada con IA."
+                } else {
+                    "Reproduciendo. Ajusta los controles en vivo."
+                }
 
             watchPlayback()
 
@@ -1032,6 +1191,7 @@ class MainActivity : ComponentActivity() {
     private fun stopPlayback() {
         engine?.stop()
         engine = null
+
         if (::playButton.isInitialized) {
             playButton.text = "▶  REPRODUCIR EN VIVO"
         }
@@ -1042,13 +1202,23 @@ class MainActivity : ComponentActivity() {
     private fun loadAudio(uri: Uri) {
 
         stopPlayback()
+
         audio = null
+        aiProcessedAudio = null
+        pendingProcessedAudio = null
+
+        aiRate = 44100
+        aiChannels = 2
 
         selectButton.isEnabled = false
+        aiButton.isEnabled = false
+        aiButton.text = "✦  PROCESAR VOZ CON IA"
         playButton.isEnabled = false
         exportButton.isEnabled = false
 
         progress.visibility = View.VISIBLE
+        progress.isIndeterminate = true
+
         status.text = "Cargando y analizando canción..."
 
         Thread {
@@ -1062,6 +1232,7 @@ class MainActivity : ComponentActivity() {
                 )
 
                 handler.post {
+
                     audio = decoded.samples
                     rate = decoded.sampleRate
                     channels = decoded.channelCount
@@ -1069,19 +1240,32 @@ class MainActivity : ComponentActivity() {
                     showAnalysis(stats)
 
                     progress.visibility = View.GONE
+
                     selectButton.isEnabled = true
+                    aiButton.isEnabled = true
                     playButton.isEnabled = true
                     exportButton.isEnabled = true
 
                     status.text = "Canción lista. Análisis completado."
-                    message("Audio cargado y analizado correctamente.")
+
+                    message(
+                        "Audio cargado correctamente. Ya puedes procesarlo con IA."
+                    )
                 }
 
             } catch (e: Exception) {
+
                 handler.post {
+
                     progress.visibility = View.GONE
+
                     selectButton.isEnabled = true
+                    aiButton.isEnabled = false
+                    playButton.isEnabled = false
+                    exportButton.isEnabled = false
+
                     status.text = "Error al cargar canción."
+
                     message(e.message ?: "Error de audio.")
                 }
             }
@@ -1103,6 +1287,7 @@ class MainActivity : ComponentActivity() {
 
             for (i in 0 until extractor.trackCount) {
                 val candidate = extractor.getTrackFormat(i)
+
                 if ((candidate.getString(MediaFormat.KEY_MIME) ?: "")
                     .startsWith("audio/")
                 ) {
@@ -1145,17 +1330,26 @@ class MainActivity : ComponentActivity() {
                             ?: throw Exception("Error leyendo audio.")
 
                         input.clear()
+
                         val size = extractor.readSampleData(input, 0)
 
                         if (size < 0) {
                             codec.queueInputBuffer(
-                                index, 0, 0, 0,
+                                index,
+                                0,
+                                0,
+                                0,
                                 MediaCodec.BUFFER_FLAG_END_OF_STREAM
                             )
                             inputDone = true
+
                         } else {
                             codec.queueInputBuffer(
-                                index, 0, size, extractor.sampleTime, 0
+                                index,
+                                0,
+                                size,
+                                extractor.sampleTime,
+                                0
                             )
                             extractor.advance()
                         }
@@ -1165,10 +1359,13 @@ class MainActivity : ComponentActivity() {
                 val outIndex = codec.dequeueOutputBuffer(info, 10000)
 
                 when {
+
                     outIndex >= 0 -> {
+
                         val buffer = codec.getOutputBuffer(outIndex)
 
                         if (buffer != null && info.size > 0) {
+
                             val fmt = codec.outputFormat
 
                             if (fmt.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
@@ -1191,7 +1388,9 @@ class MainActivity : ComponentActivity() {
                             output.write(chunk)
 
                             if (output.size() > 100 * 1024 * 1024) {
-                                throw Exception("Audio demasiado grande: límite 100 MB.")
+                                throw Exception(
+                                    "Audio demasiado grande: límite 100 MB."
+                                )
                             }
                         }
 
@@ -1199,11 +1398,14 @@ class MainActivity : ComponentActivity() {
                             info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
 
                         codec.releaseOutputBuffer(outIndex, false)
+
                         if (ended) outputDone = true
                     }
 
                     outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+
                         val fmt = codec.outputFormat
+
                         sr = fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                         ch = fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
 
@@ -1219,20 +1421,29 @@ class MainActivity : ComponentActivity() {
             }
 
             val bytes = output.toByteArray()
-            val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.nativeOrder())
+
+            val buffer = ByteBuffer.wrap(bytes)
+                .order(ByteOrder.nativeOrder())
 
             val samples = when (encoding) {
+
                 AudioFormat.ENCODING_PCM_16BIT -> {
+
                     if (bytes.size % 2 != 0) {
                         throw Exception("Audio PCM incompleto.")
                     }
-                    ShortArray(bytes.size / 2) { buffer.short }
+
+                    ShortArray(bytes.size / 2) {
+                        buffer.short
+                    }
                 }
 
                 AudioFormat.ENCODING_PCM_FLOAT -> {
+
                     if (bytes.size % 4 != 0) {
                         throw Exception("Audio PCM incompleto.")
                     }
+
                     ShortArray(bytes.size / 4) {
                         (buffer.float.coerceIn(-1f, 1f) * 32767f)
                             .toInt().toShort()
@@ -1240,6 +1451,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 AudioFormat.ENCODING_PCM_8BIT -> {
+
                     ShortArray(bytes.size) {
                         (((bytes[it].toInt() and 255) - 128) shl 8).toShort()
                     }
@@ -1255,8 +1467,14 @@ class MainActivity : ComponentActivity() {
             return Decoded(samples, sr, ch)
 
         } finally {
-            try { codec?.stop() } catch (_: Exception) {}
-            try { codec?.release() } catch (_: Exception) {}
+            try {
+                codec?.stop()
+            } catch (_: Exception) {}
+
+            try {
+                codec?.release()
+            } catch (_: Exception) {}
+
             extractor.release()
         }
     }
@@ -1277,10 +1495,12 @@ class MainActivity : ComponentActivity() {
 
         fun process(x: Double): Double {
             val y = b0*x + b1*x1 + b2*x2 - a1*y1 - a2*y2
+
             x2 = x1
             x1 = x
             y2 = y1
             y1 = y
+
             return y
         }
     }
@@ -1292,6 +1512,7 @@ class MainActivity : ComponentActivity() {
     ): Filter? {
 
         val f = freq.coerceIn(20.0, sr * 0.45)
+
         if (f >= sr / 2.0) return null
 
         val a = 10.0.pow(db / 40.0)
@@ -1348,8 +1569,6 @@ class MainActivity : ComponentActivity() {
 
         val output = ShortArray(input.size)
 
-        // Procesamiento por bloques para conservar
-        // el estado de filtros, reverberación y limitador.
         val blockSize = 8192 - (8192 % ch)
 
         var offset = 0
@@ -1387,6 +1606,10 @@ class MainActivity : ComponentActivity() {
         ch: Int
     ): ByteArray {
 
+        require(ch in 1..2)
+        require(sr in 8000..192000)
+        require(samples.size % ch == 0)
+
         val size = samples.size * 2
 
         val b = ByteBuffer.allocate(44 + size)
@@ -1406,7 +1629,9 @@ class MainActivity : ComponentActivity() {
         b.put("data".toByteArray(Charsets.US_ASCII))
         b.putInt(size)
 
-        samples.forEach { b.putShort(it) }
+        samples.forEach {
+            b.putShort(it)
+        }
 
         return b.array()
     }
@@ -1415,11 +1640,13 @@ class MainActivity : ComponentActivity() {
 
     private fun exportAudio() {
 
-        val samples = audio ?: return
+        val samples = aiProcessedAudio ?: audio
+            ?: return message("Primero selecciona una canción.")
+
+        val sr = if (aiProcessedAudio != null) aiRate else rate
+        val ch = if (aiProcessedAudio != null) aiChannels else channels
 
         val values = gains()
-        val sr = rate
-        val ch = channels
         val bass = bassSwitch.isChecked
         val reverb = reverbSwitch.isChecked
         val stereo = stereoSwitch.isChecked
@@ -1427,30 +1654,55 @@ class MainActivity : ComponentActivity() {
         val clarity = claritySlider.progress
         val hum = humSwitch.isChecked
 
+        stopPlayback()
+
         exportButton.isEnabled = false
         progress.visibility = View.VISIBLE
-        status.text = "I-A-M está procesando tu canción..."
+        progress.isIndeterminate = true
+
+        status.text = "I-A-M está preparando la canción para exportar..."
 
         Thread {
             try {
+
                 val result = applyEffects(
-                    samples, sr, ch, values,
-                    bass, reverb, stereo, volume, clarity, hum
+                    samples,
+                    sr,
+                    ch,
+                    values,
+                    bass,
+                    reverb,
+                    stereo,
+                    volume,
+                    clarity,
+                    hum
                 )
 
                 handler.post {
+
                     pendingProcessedAudio = result
+                    pendingExportRate = sr
+                    pendingExportChannels = ch
+
                     progress.visibility = View.GONE
+
                     exportButton.isEnabled = true
+
                     status.text = "Canción preparada."
+
                     showExportPage()
                 }
 
             } catch (e: Exception) {
+
                 handler.post {
+
                     progress.visibility = View.GONE
                     exportButton.isEnabled = true
-                    message(e.message ?: "Error preparando audio.")
+
+                    message(
+                        e.message ?: "Error preparando audio."
+                    )
                 }
             }
         }.start()
@@ -1461,13 +1713,16 @@ class MainActivity : ComponentActivity() {
     private fun saveWav(uri: Uri) {
 
         val samples = pendingProcessedAudio ?: return
-        val sr = rate
-        val ch = channels
+
+        val sr = pendingExportRate
+        val ch = pendingExportChannels
 
         progress.visibility = View.VISIBLE
+        progress.isIndeterminate = true
 
         Thread {
             try {
+
                 val data = wav(samples, sr, ch)
 
                 contentResolver.openOutputStream(uri)?.use {
@@ -1476,13 +1731,18 @@ class MainActivity : ComponentActivity() {
                 } ?: throw Exception("No se pudo guardar el WAV.")
 
                 handler.post {
+
                     progress.visibility = View.GONE
+
                     message("WAV guardado correctamente.")
 
                     if (pendingCoverJpeg != null) {
                         pendingCoverSave = true
+
                         saveCoverPicker.launch(
-                            makeCoverFileName(exportNameInput.text.toString())
+                            makeCoverFileName(
+                                exportNameInput.text.toString()
+                            )
                         )
                     } else {
                         finishExport()
@@ -1490,9 +1750,14 @@ class MainActivity : ComponentActivity() {
                 }
 
             } catch (e: Exception) {
+
                 handler.post {
+
                     progress.visibility = View.GONE
-                    message(e.message ?: "Error guardando WAV.")
+
+                    message(
+                        e.message ?: "Error guardando WAV."
+                    )
                 }
             }
         }.start()
@@ -1503,8 +1768,9 @@ class MainActivity : ComponentActivity() {
     private fun saveMp3(uri: Uri) {
 
         val samples = pendingProcessedAudio ?: return
-        val sr = rate
-        val ch = channels
+
+        val sr = pendingExportRate
+        val ch = pendingExportChannels
         val cover = pendingCoverJpeg
 
         val title = makeExportFileName(
@@ -1515,6 +1781,8 @@ class MainActivity : ComponentActivity() {
         pendingExportTitle = title
 
         progress.visibility = View.VISIBLE
+        progress.isIndeterminate = true
+
         message("I-A-M está creando el MP3. Espera un momento.")
 
         Thread {
@@ -1547,8 +1815,11 @@ class MainActivity : ComponentActivity() {
                 tempFile = null
 
                 handler.post {
+
                     progress.visibility = View.GONE
+
                     message("¡MP3 exportado correctamente con I-A-M!")
+
                     finishExport()
                 }
 
@@ -1557,11 +1828,14 @@ class MainActivity : ComponentActivity() {
                 tempFile?.delete()
 
                 handler.post {
+
                     progress.visibility = View.GONE
-                    message(e.message ?: "Error creando el MP3.")
+
+                    message(
+                        e.message ?: "Error creando el MP3."
+                    )
                 }
             }
-
         }.start()
     }
 
@@ -1577,6 +1851,7 @@ class MainActivity : ComponentActivity() {
         }
 
         try {
+
             contentResolver.openOutputStream(uri)?.use {
                 it.write(cover)
                 it.flush()
@@ -1585,7 +1860,10 @@ class MainActivity : ComponentActivity() {
             message("Carátula JPG guardada junto con tu WAV.")
 
         } catch (e: Exception) {
-            message(e.message ?: "No se pudo guardar la carátula.")
+
+            message(
+                e.message ?: "No se pudo guardar la carátula."
+            )
         }
 
         pendingCoverSave = false
@@ -1593,9 +1871,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun finishExport() {
+
         pendingProcessedAudio = null
+
         setContentView(mainScreen)
-        status.text = "Exportación terminada. Puedes elegir otra canción."
+
+        status.text =
+            "Exportación terminada. Puedes continuar trabajando."
     }
 
     private fun message(text: String) {
@@ -1659,8 +1941,10 @@ class VerticalFader(context: android.content.Context) : View(context) {
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.action) {
+
             MotionEvent.ACTION_DOWN,
             MotionEvent.ACTION_MOVE -> {
+
                 val top = 12f
                 val bottom = height - 12f
                 val center = (top + bottom) / 2f
@@ -1670,6 +1954,7 @@ class VerticalFader(context: android.content.Context) : View(context) {
                     ((center - event.y.coerceIn(top, bottom)) / range) * 12f
 
                 parent?.requestDisallowInterceptTouchEvent(true)
+
                 return true
             }
 
@@ -1678,6 +1963,7 @@ class VerticalFader(context: android.content.Context) : View(context) {
                 return true
             }
         }
+
         return true
     }
 
