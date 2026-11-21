@@ -31,6 +31,10 @@ class LiveAudioEngine(
     @Volatile
     var stereoEnabled = false
 
+    // Nuevo: eliminación de zumbido eléctrico.
+    @Volatile
+    var humRemoval = false
+
     @Volatile
     var volumePercent = 100f
 
@@ -163,7 +167,8 @@ class LiveAudioEngine(
                 reverbEnabled = reverbEnabled,
                 stereoEnabled = stereoEnabled,
                 volumePercent = volumePercent.toInt(),
-                vocalClarity = vocalClarity.toInt()
+                vocalClarity = vocalClarity.toInt(),
+                humRemoval = humRemoval
             )
         )
     }
