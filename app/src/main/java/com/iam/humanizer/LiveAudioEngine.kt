@@ -1,3 +1,4 @@
+
 package com.iam.humanizer
 
 import android.media.AudioAttributes
@@ -11,6 +12,10 @@ import kotlin.math.exp
 import kotlin.math.log10
 import kotlin.math.sqrt
 
+/**
+ * I-A-M SMART AUDIO ENGINE 2.2
+ * Reproducción con actualización de efectos en tiempo real.
+ */
 class LiveAudioEngine(
     private val sampleRate: Int,
     private val channels: Int,
@@ -33,8 +38,6 @@ class LiveAudioEngine(
     @Volatile
     var humRemoval = false
 
-    // Nuevo control de reducción de ruido.
-    // 0 = apagado, 100 = máximo.
     @Volatile
     var noiseReduction = 0f
 
@@ -60,10 +63,13 @@ class LiveAudioEngine(
     var analysis = AudioAnalysis()
         private set
 
+    @Volatile
     private var audioTrack: AudioTrack? = null
+
     private var playbackThread: Thread? = null
     private var position = 0
 
+    @Volatile
     private var processor: AudioProcessor? = null
 
     private var lowState = 0.0
@@ -100,7 +106,20 @@ class LiveAudioEngine(
     }
 
     fun setNoiseReductionLevel(percent: Float) {
-    noiseReduction = percent.coerceIn(0f, 100f)
+        noiseReduction = percent.coerceIn(0f, 100f)
+    }
+
+    private fun currentSettings(): AudioProcessor.Settings {
+        return AudioProcessor.Settings(
+            equalizer = gains.copyOf(),
+            bassEnabled = bassEnabled,
+            reverbEnabled = reverbEnabled,
+            stereoEnabled = stereoEnabled,
+            volumePercent = volumePercent.toInt(),
+            vocalClarity = vocalClarity.toInt(),
+            noiseReduction = noiseReduction / 100f,
+            humRemoval = humRemoval
+        )
     }
 
     private fun updateAnalysis(input: ShortArray) {
@@ -168,24 +187,19 @@ class LiveAudioEngine(
         return AudioProcessor(
             sampleRate = sampleRate,
             channels = channels,
-            settings = AudioProcessor.Settings(
-                equalizer = gains.copyOf(),
-                bassEnabled = bassEnabled,
-                reverbEnabled = reverbEnabled,
-                stereoEnabled = stereoEnabled,
-                volumePercent = volumePercent.toInt(),
-                vocalClarity = vocalClarity.toInt(),
-                noiseReduction = noiseReduction / 100f,
-                humRemoval = humRemoval
-            )
+            settings = currentSettings()
         )
     }
 
     private fun processBlock(input: ShortArray): ShortArray {
         updateAnalysis(input)
 
-        return processor?.process(input)
-            ?: input.copyOf()
+        val activeProcessor = processor
+            ?: return input.copyOf()
+
+        activeProcessor.updateSettings(currentSettings())
+
+        return activeProcessor.process(input)
     }
 
     @Synchronized
