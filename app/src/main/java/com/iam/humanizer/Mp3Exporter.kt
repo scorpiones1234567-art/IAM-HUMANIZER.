@@ -1,4 +1,3 @@
-
 package com.iam.humanizer
 
 import android.content.Context
@@ -32,7 +31,9 @@ object Mp3Exporter {
             "Audio incompleto."
         }
 
-        val outputRate = minOf(sampleRate, 44100)
+        require(sampleRate in 8000..48000) {
+            "Frecuencia de audio no compatible: $sampleRate"
+        }
 
         val rawFile = File(context.cacheDir, "iam_temp_raw.mp3")
         val finalFile = File(context.cacheDir, "iam_temp_final.mp3")
@@ -40,19 +41,10 @@ object Mp3Exporter {
         rawFile.delete()
         finalFile.delete()
 
-        val model = if (channels == 1) {
-            Lame.LameModel.MONO
-        } else {
-            Lame.LameModel.JOINT_STEREO
-        }
-
         val lame = Lame(
             sampleRate,
             channels,
-            outputRate,
-            192,
-            model,
-            Lame.LameQuality.GOOD
+            sampleRate
         )
 
         val stream = LameOutputStream(
@@ -120,3 +112,4 @@ object Mp3Exporter {
         }
     }
 }
+
