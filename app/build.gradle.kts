@@ -29,9 +29,12 @@ android {
 dependencies {
     implementation("androidx.activity:activity-ktx:1.10.1")
 
-    // Codificador de audio MP3
+    // MOTOR DE INTELIGENCIA ARTIFICIAL ONNX
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.32.0")
+
+    // EXPORTACIÓN MP3
     implementation("net.qiujuer.lame:lame:1.0.0")
 
-    // Carátulas y metadatos ID3 para MP3
+    // CARÁTULAS Y METADATOS
     implementation("com.mpatric:mp3agic:0.9.1")
 }
