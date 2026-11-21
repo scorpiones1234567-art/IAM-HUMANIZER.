@@ -14,7 +14,8 @@ import kotlin.math.sin
 
 /**
  * I-A-M SMART AUDIO ENGINE
- * Control giratorio profesional de 0 a 100.
+ * Control giratorio profesional.
+ * Corrección del movimiento y lectura del ángulo.
  */
 class RotaryKnob(context: Context) : View(context) {
 
@@ -34,10 +35,13 @@ class RotaryKnob(context: Context) : View(context) {
 
     var value: Float = 0f
         set(value) {
-            field = value.coerceIn(minValue, maxValue)
-            contentDescription = "Control: ${field.roundToInt()}$suffix"
-            invalidate()
-            onValueChanged?.invoke(field)
+            val newValue = value.coerceIn(minValue, maxValue)
+            if (field != newValue) {
+                field = newValue
+                contentDescription = "Control: ${field.roundToInt()}$suffix"
+                invalidate()
+                onValueChanged?.invoke(field)
+            }
         }
 
     var suffix: String = "%"
@@ -199,12 +203,14 @@ class RotaryKnob(context: Context) : View(context) {
             atan2(dy.toDouble(), dx.toDouble())
         ).toFloat()
 
-        if (angle < -135f) {
-            angle += 360f
-        }
+        // Normalizar el ángulo entre 0 y 360 grados.
+        angle = (angle + 360f) % 360f
+
+        // Convertir el ángulo a la posición del arco.
+        val relativeAngle = (angle - startAngle + 360f) % 360f
 
         val normalized = (
-            (angle - 135f) / 270f
+            relativeAngle / sweepAngle
         ).coerceIn(0f, 1f)
 
         value = minValue +
@@ -225,11 +231,15 @@ class RotaryKnob(context: Context) : View(context) {
             }
 
             MotionEvent.ACTION_UP -> {
+                parent?.requestDisallowInterceptTouchEvent(false)
                 performClick()
                 return true
             }
 
-            MotionEvent.ACTION_CANCEL -> return true
+            MotionEvent.ACTION_CANCEL -> {
+                parent?.requestDisallowInterceptTouchEvent(false)
+                return true
+            }
         }
 
         return true
