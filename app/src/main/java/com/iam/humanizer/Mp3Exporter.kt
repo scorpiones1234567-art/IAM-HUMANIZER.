@@ -1,3 +1,4 @@
+
 package com.iam.humanizer
 
 import android.content.Context
@@ -41,48 +42,58 @@ object Mp3Exporter {
         rawFile.delete()
         finalFile.delete()
 
+        // Seleccionar el modo correcto según los canales.
+        val mode = if (channels == 1) {
+            Lame.LameModel.MONO
+        } else {
+            Lame.LameModel.JOINT_STEREO
+        }
+
+        // Inicializar LAME con calidad y bitrate definidos.
         val lame = Lame(
             sampleRate,
             channels,
-            sampleRate
-        )
-
-        val stream = LameOutputStream(
-            lame,
-            FileOutputStream(rawFile),
-            8192
+            sampleRate,
+            192,
+            mode,
+            Lame.LameQuality.NEAR_BEST
         )
 
         try {
-            var offset = 0
+            LameOutputStream(
+                lame,
+                FileOutputStream(rawFile),
+                8192
+            ).use { stream ->
 
-            while (offset < samples.size) {
-                var length = minOf(8192, samples.size - offset)
+                var offset = 0
 
-                if (channels == 2 && length % 2 != 0) {
-                    length--
+                while (offset < samples.size) {
+                    var length = minOf(8192, samples.size - offset)
+
+                    if (channels == 2 && length % 2 != 0) {
+                        length--
+                    }
+
+                    if (length <= 0) break
+
+                    val chunk = samples.copyOfRange(
+                        offset,
+                        offset + length
+                    )
+
+                    stream.write(chunk, chunk.size)
+                    offset += length
                 }
-
-                if (length <= 0) break
-
-                val chunk = samples.copyOfRange(
-                    offset,
-                    offset + length
-                )
-
-                stream.write(chunk, chunk.size)
-                offset += length
             }
 
-            stream.close()
+            require(rawFile.exists() && rawFile.length() > 0) {
+                "LAME no generó audio MP3."
+            }
 
         } catch (e: Exception) {
-            try {
-                stream.close()
-            } catch (_: Exception) {
-            }
-
             rawFile.delete()
+            finalFile.delete()
             throw e
         }
 
@@ -102,6 +113,10 @@ object Mp3Exporter {
             mp3.setId3v2Tag(tag)
             mp3.save(finalFile.absolutePath)
 
+            require(finalFile.exists() && finalFile.length() > 0) {
+                "No se pudo guardar el MP3 final."
+            }
+
             rawFile.delete()
             return finalFile
 
@@ -112,4 +127,3 @@ object Mp3Exporter {
         }
     }
 }
-
