@@ -1,4 +1,3 @@
-
 package com.iam.humanizer
 
 import android.media.AudioAttributes
@@ -31,9 +30,13 @@ class LiveAudioEngine(
     @Volatile
     var stereoEnabled = false
 
-    // Nuevo: eliminación de zumbido eléctrico.
     @Volatile
     var humRemoval = false
+
+    // Nuevo control de reducción de ruido.
+    // 0 = apagado, 100 = máximo.
+    @Volatile
+    var noiseReduction = 0f
 
     @Volatile
     var volumePercent = 100f
@@ -94,6 +97,10 @@ class LiveAudioEngine(
 
     fun setVocalClarityLevel(percent: Float) {
         vocalClarity = percent.coerceIn(0f, 100f)
+    }
+
+    fun setNoiseReduction(percent: Float) {
+        noiseReduction = percent.coerceIn(0f, 100f)
     }
 
     private fun updateAnalysis(input: ShortArray) {
@@ -168,6 +175,7 @@ class LiveAudioEngine(
                 stereoEnabled = stereoEnabled,
                 volumePercent = volumePercent.toInt(),
                 vocalClarity = vocalClarity.toInt(),
+                noiseReduction = noiseReduction / 100f,
                 humRemoval = humRemoval
             )
         )
