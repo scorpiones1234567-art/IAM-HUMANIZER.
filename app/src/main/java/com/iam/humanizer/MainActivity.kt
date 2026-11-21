@@ -1,4 +1,3 @@
-
 package com.iam.humanizer
 
 import android.graphics.Canvas
@@ -38,6 +37,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var bassSwitch: Switch
     private lateinit var reverbSwitch: Switch
     private lateinit var stereoSwitch: Switch
+    private lateinit var humSwitch: Switch
     private lateinit var presetSpinner: Spinner
     private lateinit var faders: List<VerticalFader>
 
@@ -61,9 +61,9 @@ class MainActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
 
     private var pendingProcessedAudio: ShortArray? = null
-private var pendingCoverJpeg: ByteArray? = null
-private var pendingCoverSave = false
-private var pendingExportTitle = "Cancion"
+    private var pendingCoverJpeg: ByteArray? = null
+    private var pendingCoverSave = false
+    private var pendingExportTitle = "Cancion"
 
     private val cyan = 0xFF36E5FF.toInt()
     private val pink = 0xFFFF4FCB.toInt()
@@ -479,12 +479,20 @@ private var pendingExportTitle = "Cancion"
             setOnCheckedChangeListener { _, _ -> updateEngine() }
         }
 
+        humSwitch = Switch(this).apply {
+            text = "Eliminar zumbido eléctrico (60 Hz)"
+            setTextColor(white)
+            setOnCheckedChangeListener { _, _ -> updateEngine() }
+        }
+
         content.addView(bassSwitch)
         content.addView(reverbSwitch)
         content.addView(stereoSwitch)
+        content.addView(humSwitch)
 
         content.addView(label(
-            "Los cambios se aplican durante la reproducción.", 12f
+            "El filtro de zumbido se aplica al iniciar la reproducción o al preparar la exportación.",
+            12f
         ).apply {
             setTextColor(cyan)
         })
@@ -809,6 +817,7 @@ private var pendingExportTitle = "Cancion"
         current.bassEnabled = bassSwitch.isChecked
         current.reverbEnabled = reverbSwitch.isChecked
         current.stereoEnabled = stereoSwitch.isChecked
+        current.humRemoval = humSwitch.isChecked
         current.setVolume(volumeSlider.progress.toFloat())
         current.setVocalClarityLevel(claritySlider.progress.toFloat())
     }
@@ -952,6 +961,7 @@ private var pendingExportTitle = "Cancion"
             newEngine.bassEnabled = bassSwitch.isChecked
             newEngine.reverbEnabled = reverbSwitch.isChecked
             newEngine.stereoEnabled = stereoSwitch.isChecked
+            newEngine.humRemoval = humSwitch.isChecked
             newEngine.setVolume(volumeSlider.progress.toFloat())
             newEngine.setVocalClarityLevel(claritySlider.progress.toFloat())
 
@@ -1260,9 +1270,6 @@ private var pendingExportTitle = "Cancion"
         )
     }
 
-    // PROCESAMIENTO PARA EXPORTACIÓN
-
-    
     // PROCESAMIENTO COMPARTIDO PARA EXPORTACIÓN WAV Y MP3
 
     private fun applyEffects(
@@ -1274,7 +1281,8 @@ private var pendingExportTitle = "Cancion"
         reverb: Boolean,
         stereo: Boolean,
         volumePercent: Int,
-        clarityPercent: Int
+        clarityPercent: Int,
+        hum: Boolean
     ): ShortArray {
 
         require(ch in 1..2) {
@@ -1294,7 +1302,8 @@ private var pendingExportTitle = "Cancion"
                 reverbEnabled = reverb,
                 stereoEnabled = stereo,
                 volumePercent = volumePercent,
-                vocalClarity = clarityPercent
+                vocalClarity = clarityPercent,
+                humRemoval = hum
             )
         )
 
@@ -1330,7 +1339,6 @@ private var pendingExportTitle = "Cancion"
 
         return output
     }
-
 
     // CREAR WAV
 
@@ -1378,6 +1386,7 @@ private var pendingExportTitle = "Cancion"
         val stereo = stereoSwitch.isChecked
         val volume = volumeSlider.progress
         val clarity = claritySlider.progress
+        val hum = humSwitch.isChecked
 
         exportButton.isEnabled = false
         progress.visibility = View.VISIBLE
@@ -1387,7 +1396,7 @@ private var pendingExportTitle = "Cancion"
             try {
                 val result = applyEffects(
                     samples, sr, ch, values,
-                    bass, reverb, stereo, volume, clarity
+                    bass, reverb, stereo, volume, clarity, hum
                 )
 
                 handler.post {
@@ -1452,72 +1461,70 @@ private var pendingExportTitle = "Cancion"
 
     // GUARDAR MP3
 
-    // GUARDAR MP3
+    private fun saveMp3(uri: Uri) {
 
-private fun saveMp3(uri: Uri) {
+        val samples = pendingProcessedAudio ?: return
+        val sr = rate
+        val ch = channels
+        val cover = pendingCoverJpeg
 
-    val samples = pendingProcessedAudio ?: return
-    val sr = rate
-    val ch = channels
-    val cover = pendingCoverJpeg
+        val title = makeExportFileName(
+            exportNameInput.text.toString(),
+            "mp3"
+        ).removeSuffix(".mp3")
 
-    val title = makeExportFileName(
-        exportNameInput.text.toString(),
-        "mp3"
-    ).removeSuffix(".mp3")
+        pendingExportTitle = title
 
-    pendingExportTitle = title
+        progress.visibility = View.VISIBLE
+        message("I-A-M está creando el MP3. Espera un momento.")
 
-    progress.visibility = View.VISIBLE
-    message("I-A-M está creando el MP3. Espera un momento.")
+        Thread {
+            var tempFile: File? = null
 
-    Thread {
-        var tempFile: File? = null
+            try {
 
-        try {
+                val generatedFile = Mp3Exporter.export(
+                    this,
+                    samples,
+                    sr,
+                    ch,
+                    title,
+                    cover
+                )
 
-            val generatedFile = Mp3Exporter.export(
-                this,
-                samples,
-                sr,
-                ch,
-                title,
-                cover
-            )
+                tempFile = generatedFile
 
-            tempFile = generatedFile
+                contentResolver.openOutputStream(uri)?.use { output ->
 
-            contentResolver.openOutputStream(uri)?.use { output ->
+                    generatedFile.inputStream().use { input ->
+                        input.copyTo(output)
+                    }
 
-                generatedFile.inputStream().use { input ->
-                    input.copyTo(output)
+                    output.flush()
+
+                } ?: throw Exception("No se pudo guardar el MP3.")
+
+                generatedFile.delete()
+                tempFile = null
+
+                handler.post {
+                    progress.visibility = View.GONE
+                    message("¡MP3 exportado correctamente con I-A-M!")
+                    finishExport()
                 }
 
-                output.flush()
+            } catch (e: Exception) {
 
-            } ?: throw Exception("No se pudo guardar el MP3.")
+                tempFile?.delete()
 
-            generatedFile.delete()
-            tempFile = null
-
-            handler.post {
-                progress.visibility = View.GONE
-                message("¡MP3 exportado correctamente con I-A-M!")
-                finishExport()
+                handler.post {
+                    progress.visibility = View.GONE
+                    message(e.message ?: "Error creando el MP3.")
+                }
             }
 
-        } catch (e: Exception) {
-
-            tempFile?.delete()
-
-            handler.post {
-                progress.visibility = View.GONE
-                message(e.message ?: "Error creando el MP3.")
-            }
-        }
-
-    }.start()
-}
+        }.start()
+    }
 
     // GUARDAR CARÁTULA INDEPENDIENTE PARA WAV
 
