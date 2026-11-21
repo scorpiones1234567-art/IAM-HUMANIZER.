@@ -7,10 +7,9 @@ import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.pow
 import kotlin.math.sin
-import kotlin.math.sqrt
 
 /**
- * I-A-M MOTOR MUSICAL 2.0
+ * I-A-M MOTOR MUSICAL 2.1
  * Núcleo compartido de procesamiento de audio.
  *
  * Reproduce y exporta utilizando el mismo procesamiento.
@@ -28,7 +27,8 @@ class AudioProcessor(
         val stereoEnabled: Boolean = false,
         val volumePercent: Int = 100,
         val vocalClarity: Int = 0,
-        val noiseReduction: Float = 0f
+        val noiseReduction: Float = 0f,
+        val humRemoval: Boolean = false
     )
 
     private class Biquad(
@@ -96,6 +96,7 @@ class AudioProcessor(
     private val equalizerFilters: Array<Array<Biquad?>>
     private val bassFilters: Array<Biquad?>
     private val clarityFilters: Array<Biquad?>
+    private val humFilters: Array<Array<Biquad>>
 
     private val delayFrames =
         (sampleRate * 0.22f).toInt().coerceAtLeast(1)
@@ -124,7 +125,9 @@ class AudioProcessor(
                     .getOrElse(band) { 0f }
                     .coerceIn(-12f, 12f)
 
-                if (frequency < sampleRate * 0.45f && abs(gain) > 0.01f) {
+                if (frequency < sampleRate * 0.45f &&
+                    abs(gain) > 0.01f
+                ) {
                     Biquad(sampleRate, frequency, gain)
                 } else {
                     null
@@ -148,11 +151,33 @@ class AudioProcessor(
                 )
             } else null
         }
+
+        // Eliminación opcional de zumbido eléctrico.
+        // Frecuencia fundamental: 60 Hz.
+        // Armónicos: 120 Hz y 180 Hz.
+        // Se mantiene apagada por defecto para proteger la música.
+        humFilters = Array(channels) {
+            if (settings.humRemoval) {
+                arrayOf(60f, 120f, 180f)
+                    .filter { it < sampleRate * 0.45f }
+                    .map {
+                        Biquad(
+                            sampleRate,
+                            it,
+                            -18.0f,
+                            18.0f
+                        )
+                    }
+                    .toTypedArray()
+            } else {
+                emptyArray()
+            }
+        }
     }
 
     /**
      * Procesa un bloque PCM de 16 bits.
-     * Puede llamarse repetidamente sin perder el estado de los filtros.
+     * Conserva el estado de los filtros entre bloques.
      */
     fun process(input: ShortArray): ShortArray {
         if (input.isEmpty()) return ShortArray(0)
@@ -176,7 +201,9 @@ class AudioProcessor(
         for (frame in 0 until frames) {
             val frameStart = frame * channels
 
-            var left = input[frameStart].toDouble() / 32768.0
+            var left =
+                input[frameStart].toDouble() / 32768.0
+
             var right = if (channels == 2) {
                 input[frameStart + 1].toDouble() / 32768.0
             } else {
@@ -218,10 +245,23 @@ class AudioProcessor(
                 }
             }
 
-            // Reducción suave de ruido: evita cambios bruscos.
-            // No sustituye una separación de voz o un denoiser avanzado.
+            // Eliminación opcional de zumbido eléctrico.
+            for (filter in humFilters[0]) {
+                left = filter.process(left)
+            }
+
+            if (channels == 2) {
+                for (filter in humFilters[1]) {
+                    right = filter.process(right)
+                }
+            }
+
+            // Reducción suave de ruido existente.
+            // No es todavía un denoiser avanzado.
             if (clarityNoise > 0f) {
-                val attenuation = 1.0 - clarityNoise * 0.08
+                val attenuation =
+                    1.0 - clarityNoise * 0.08
+
                 left *= attenuation
                 right *= attenuation
             }
@@ -238,6 +278,7 @@ class AudioProcessor(
             // Reverberación con memoria entre bloques.
             if (wet > 0.0) {
                 val delayedLeft = delayBuffer[delayPosition]
+
                 val delayedRight = if (channels == 2) {
                     delayBuffer[delayPosition + 1]
                 } else {
@@ -256,6 +297,7 @@ class AudioProcessor(
                 right += delayedRight * wet
 
                 delayPosition += channels
+
                 if (delayPosition >= delayBuffer.size) {
                     delayPosition = 0
                 }
@@ -265,7 +307,7 @@ class AudioProcessor(
             left *= volume
             right *= volume
 
-            // Limitador enlazado: protege ambos canales juntos.
+            // Limitador enlazado.
             val peak = max(abs(left), abs(right))
 
             val targetGain = if (peak > limiterCeiling) {
@@ -288,7 +330,8 @@ class AudioProcessor(
 
             // Conversión segura a PCM de 16 bits.
             output[frameStart] =
-                (left.coerceIn(-1.0, 1.0) * 32767.0).toInt().toShort()
+                (left.coerceIn(-1.0, 1.0) * 32767.0)
+                    .toInt().toShort()
 
             if (channels == 2) {
                 output[frameStart + 1] =
