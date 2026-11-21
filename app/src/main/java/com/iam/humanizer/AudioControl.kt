@@ -23,21 +23,20 @@ class AudioControl(
 
     private val valueLabel = TextView(context)
 
+    var onValueChanged: ((Float) -> Unit)? = null
+
     var value: Float
         get() = knob.value
         set(newValue) {
             knob.value = newValue
-            updateValue(newValue)
+            updateValue(knob.value)
         }
-
-    var onValueChanged: ((Float) -> Unit)? = null
 
     init {
         orientation = VERTICAL
         gravity = Gravity.CENTER
-        setPadding(
-            dp(5), dp(8), dp(5), dp(8)
-        )
+
+        setPadding(dp(5), dp(8), dp(5), dp(8))
 
         val titleLabel = TextView(context).apply {
             text = title
@@ -59,7 +58,6 @@ class AudioControl(
         knob.maxValue = maxValue
         knob.suffix = suffix
         knob.accentColor = accentColor
-
         knob.value = initialValue
 
         addView(
@@ -98,11 +96,11 @@ class AudioControl(
             )
         )
 
-        updateValue(initialValue)
+        updateValue(knob.value)
 
-        knob.onValueChanged = {
-            updateValue(it)
-            onValueChanged?.invoke(it)
+        knob.onValueChanged = { newValue ->
+            updateValue(newValue)
+            onValueChanged?.invoke(newValue)
         }
     }
 
