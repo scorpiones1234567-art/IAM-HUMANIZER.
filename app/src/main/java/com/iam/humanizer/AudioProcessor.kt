@@ -9,15 +9,14 @@ import kotlin.math.pow
 import kotlin.math.sin
 
 /**
- * I-A-M MOTOR MUSICAL 2.1
- * Núcleo compartido de procesamiento de audio.
- *
- * Reproduce y exporta utilizando el mismo procesamiento.
+ * I-A-M MOTOR MUSICAL 2.2
+ * Procesamiento compartido para reproducción y exportación.
+ * Permite actualizar los controles durante la reproducción.
  */
 class AudioProcessor(
     private val sampleRate: Int,
     private val channels: Int,
-    private val settings: Settings = Settings()
+    settings: Settings = Settings()
 ) {
 
     data class Settings(
@@ -93,10 +92,15 @@ class AudioProcessor(
         1000f, 2000f, 4000f, 8000f, 16000f
     )
 
-    private val equalizerFilters: Array<Array<Biquad?>>
-    private val bassFilters: Array<Biquad?>
-    private val clarityFilters: Array<Biquad?>
-    private val humFilters: Array<Array<Biquad>>
+    @Volatile
+    private var currentSettings = settings.copy(
+        equalizer = settings.equalizer.copyOf()
+    )
+
+    private lateinit var equalizerFilters: Array<Array<Biquad?>>
+    private lateinit var bassFilters: Array<Biquad?>
+    private lateinit var clarityFilters: Array<Biquad?>
+    private lateinit var humFilters: Array<Array<Biquad>>
 
     private val delayFrames =
         (sampleRate * 0.22f).toInt().coerceAtLeast(1)
@@ -105,7 +109,6 @@ class AudioProcessor(
         DoubleArray(delayFrames * channels)
 
     private var delayPosition = 0
-
     private var limiterEnvelope = 1.0
     private val limiterCeiling = 0.94
 
@@ -118,10 +121,44 @@ class AudioProcessor(
             "Solo se admite audio mono o estéreo."
         }
 
-        equalizerFilters = Array(channels) { channel ->
+        rebuildFilters()
+    }
+
+    private fun sameSettings(a: Settings, b: Settings): Boolean {
+        return a.equalizer.contentEquals(b.equalizer) &&
+            a.bassEnabled == b.bassEnabled &&
+            a.reverbEnabled == b.reverbEnabled &&
+            a.stereoEnabled == b.stereoEnabled &&
+            a.volumePercent == b.volumePercent &&
+            a.vocalClarity == b.vocalClarity &&
+            a.noiseReduction == b.noiseReduction &&
+            a.humRemoval == b.humRemoval
+    }
+
+    /**
+     * Actualiza los efectos sin detener la reproducción.
+     * Solo reconstruye filtros cuando realmente cambian los ajustes.
+     */
+    @Synchronized
+    fun updateSettings(newSettings: Settings) {
+        val safeSettings = newSettings.copy(
+            equalizer = newSettings.equalizer.copyOf()
+        )
+
+        if (sameSettings(currentSettings, safeSettings)) return
+
+        currentSettings = safeSettings
+        rebuildFilters()
+    }
+
+    @Synchronized
+    private fun rebuildFilters() {
+        val active = currentSettings
+
+        equalizerFilters = Array(channels) {
             Array(frequencies.size) { band ->
                 val frequency = frequencies[band]
-                val gain = settings.equalizer
+                val gain = active.equalizer
                     .getOrElse(band) { 0f }
                     .coerceIn(-12f, 12f)
 
@@ -136,37 +173,32 @@ class AudioProcessor(
         }
 
         bassFilters = Array(channels) {
-            if (settings.bassEnabled) {
-                Biquad(sampleRate, 90f, 3.0f, 0.8f)
-            } else null
+            if (active.bassEnabled) {
+                Biquad(sampleRate, 90f, 3f, 0.8f)
+            } else {
+                null
+            }
         }
 
         clarityFilters = Array(channels) {
-            if (settings.vocalClarity > 0) {
+            if (active.vocalClarity > 0) {
                 Biquad(
                     sampleRate,
                     3200f,
-                    settings.vocalClarity.coerceIn(0, 100) / 100f * 3.0f,
+                    active.vocalClarity.coerceIn(0, 100) / 100f * 3f,
                     0.8f
                 )
-            } else null
+            } else {
+                null
+            }
         }
 
-        // Eliminación opcional de zumbido eléctrico.
-        // Frecuencia fundamental: 60 Hz.
-        // Armónicos: 120 Hz y 180 Hz.
-        // Se mantiene apagada por defecto para proteger la música.
         humFilters = Array(channels) {
-            if (settings.humRemoval) {
+            if (active.humRemoval) {
                 arrayOf(60f, 120f, 180f)
                     .filter { it < sampleRate * 0.45f }
                     .map {
-                        Biquad(
-                            sampleRate,
-                            it,
-                            -18.0f,
-                            18.0f
-                        )
+                        Biquad(sampleRate, it, -18f, 18f)
                     }
                     .toTypedArray()
             } else {
@@ -177,8 +209,9 @@ class AudioProcessor(
 
     /**
      * Procesa un bloque PCM de 16 bits.
-     * Conserva el estado de los filtros entre bloques.
+     * Los ajustes pueden actualizarse entre bloques.
      */
+    @Synchronized
     fun process(input: ShortArray): ShortArray {
         if (input.isEmpty()) return ShortArray(0)
 
@@ -186,16 +219,17 @@ class AudioProcessor(
             "El bloque de audio está incompleto."
         }
 
+        val active = currentSettings
         val output = ShortArray(input.size)
         val frames = input.size / channels
 
-        val volume = settings.volumePercent
+        val volume = active.volumePercent
             .coerceIn(0, 120) / 100.0
 
-        val wet = if (settings.reverbEnabled) 0.16 else 0.0
+        val wet = if (active.reverbEnabled) 0.16 else 0.0
         val feedback = 0.22
 
-        val clarityNoise = settings.noiseReduction
+        val clarityNoise = active.noiseReduction
             .coerceIn(0f, 1f)
 
         for (frame in 0 until frames) {
@@ -210,7 +244,6 @@ class AudioProcessor(
                 left
             }
 
-            // Ecualizador de 10 bandas.
             for (band in frequencies.indices) {
                 equalizerFilters[0][band]?.let {
                     left = it.process(left)
@@ -223,7 +256,6 @@ class AudioProcessor(
                 }
             }
 
-            // Refuerzo de graves.
             bassFilters[0]?.let {
                 left = it.process(left)
             }
@@ -234,7 +266,6 @@ class AudioProcessor(
                 }
             }
 
-            // Presencia y claridad vocal.
             clarityFilters[0]?.let {
                 left = it.process(left)
             }
@@ -245,7 +276,6 @@ class AudioProcessor(
                 }
             }
 
-            // Eliminación opcional de zumbido eléctrico.
             for (filter in humFilters[0]) {
                 left = filter.process(left)
             }
@@ -256,18 +286,13 @@ class AudioProcessor(
                 }
             }
 
-            // Reducción suave de ruido existente.
-            // No es todavía un denoiser avanzado.
             if (clarityNoise > 0f) {
-                val attenuation =
-                    1.0 - clarityNoise * 0.08
-
+                val attenuation = 1.0 - clarityNoise * 0.08
                 left *= attenuation
                 right *= attenuation
             }
 
-            // Amplitud estéreo mediante procesamiento Mid/Side.
-            if (channels == 2 && settings.stereoEnabled) {
+            if (channels == 2 && active.stereoEnabled) {
                 val mid = (left + right) * 0.5
                 val side = (left - right) * 0.5 * 1.20
 
@@ -275,7 +300,6 @@ class AudioProcessor(
                 right = mid - side
             }
 
-            // Reverberación con memoria entre bloques.
             if (wet > 0.0) {
                 val delayedLeft = delayBuffer[delayPosition]
 
@@ -303,11 +327,9 @@ class AudioProcessor(
                 }
             }
 
-            // Volumen general.
             left *= volume
             right *= volume
 
-            // Limitador enlazado.
             val peak = max(abs(left), abs(right))
 
             val targetGain = if (peak > limiterCeiling) {
@@ -328,7 +350,6 @@ class AudioProcessor(
             left *= limiterEnvelope
             right *= limiterEnvelope
 
-            // Conversión segura a PCM de 16 bits.
             output[frameStart] =
                 (left.coerceIn(-1.0, 1.0) * 32767.0)
                     .toInt().toShort()
@@ -343,9 +364,7 @@ class AudioProcessor(
         return output
     }
 
-    /**
-     * Reinicia filtros, reverberación y limitador.
-     */
+    @Synchronized
     fun reset() {
         delayBuffer.fill(0.0)
         delayPosition = 0
