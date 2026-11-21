@@ -29,12 +29,13 @@ android {
 dependencies {
     implementation("androidx.activity:activity-ktx:1.10.1")
 
-    // MOTOR DE INTELIGENCIA ARTIFICIAL ONNX
+    // Exportación MP3
+    implementation("net.qiujuer.lame:lame:1.0.0")
+    implementation("com.mpatric:mp3agic:0.9.1")
+
+    // Motor ONNX para futuras funciones de IA
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.32.0")
 
-    // EXPORTACIÓN MP3
-    implementation("net.qiujuer.lame:lame:1.0.0")
-
-    // CARÁTULAS Y METADATOS
-    implementation("com.mpatric:mp3agic:0.9.1")
+    // IA DeepFilterNet: limpieza de ruido sin conexión
+    implementation("io.github.kaleyravideo:android-deepfilternet:0.0.8")
 }
