@@ -1,3 +1,4 @@
+
 package com.iam.humanizer
 
 import android.graphics.Canvas
@@ -39,7 +40,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var stereoSwitch: Switch
     private lateinit var humSwitch: Switch
     private lateinit var presetSpinner: Spinner
-    private lateinit var faders: List<VerticalFader>
+
+    // Ahora el ecualizador utiliza perillas giratorias.
+    private lateinit var faders: List<AudioControl>
 
     private lateinit var volumeSlider: SeekBar
     private lateinit var claritySlider: SeekBar
@@ -247,7 +250,7 @@ class MainActivity : ComponentActivity() {
         addSection(content, "ECUALIZADOR DE 10 BANDAS")
 
         content.addView(label(
-            "Ajusta graves, medios y agudos mientras escuchas.", 12f
+            "Gira cada perilla para ajustar graves, medios y agudos.", 12f
         ))
 
         presetSpinner = Spinner(this)
@@ -263,61 +266,91 @@ class MainActivity : ComponentActivity() {
         presetSpinner.adapter = adapter
         content.addView(presetSpinner, params())
 
-        val row = LinearLayout(this).apply {
+        // Fila horizontal desplazable para las diez perillas.
+        val knobRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
+            gravity = Gravity.CENTER_VERTICAL
         }
 
-        val list = mutableListOf<VerticalFader>()
-
-        frequencies.forEachIndexed { index, frequency ->
-
-            val column = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER
-            }
-
-            val valueLabel = label("0", 11f).apply {
-                setTextColor(gold)
-            }
-
-            val fader = VerticalFader(this).apply {
-                accentColor = when (index % 3) {
-                    0 -> cyan
-                    1 -> pink
-                    else -> purple
-                }
-            }
-
-            column.addView(valueLabel)
-            column.addView(
-                fader,
-                LinearLayout.LayoutParams(dp(28), dp(165))
-            )
-            column.addView(label(frequency, 10f))
-
-            fader.onValueChanged = {
-                valueLabel.text = it.roundToInt().toString()
-                updateEngine()
-            }
-
-            list.add(fader)
-
-            row.addView(
-                column,
-                LinearLayout.LayoutParams(
-                    0,
+        val knobScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            isFillViewport = false
+            addView(
+                knobRow,
+                ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
-                    1f
+                    ViewGroup.LayoutParams.WRAP_CONTENT
                 )
             )
         }
 
-        faders = list
-        content.addView(row)
+        val descriptions = listOf(
+            "Subgraves: profundidad y vibración",
+            "Graves: cuerpo y fuerza del sonido",
+            "Graves medios: peso del sonido",
+            "Medios bajos: calidez",
+            "Medios: cuerpo de instrumentos y voz",
+            "Medios altos: definición",
+            "Presencia: claridad de voz",
+            "Agudos: brillo",
+            "Agudos altos: detalle",
+            "Aire: brillo extremo"
+        )
+
+        val controls = mutableListOf<AudioControl>()
+
+        frequencies.forEachIndexed { index, frequency ->
+
+            val accent = when (index % 3) {
+                0 -> cyan
+                1 -> pink
+                else -> purple
+            }
+
+            val control = AudioControl(
+                context = this,
+                title = frequency,
+                description = descriptions[index],
+                accentColor = accent,
+                minValue = -12f,
+                maxValue = 12f,
+                initialValue = 0f,
+                suffix = " dB"
+            )
+
+            // Cada cambio de perilla actualiza el ecualizador del motor.
+            control.onValueChanged = {
+                updateEngine()
+            }
+
+            controls.add(control)
+
+            knobRow.addView(
+                control,
+                LinearLayout.LayoutParams(
+                    dp(132),
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    marginEnd = dp(6)
+                }
+            )
+        }
+
+        faders = controls
+
+        content.addView(
+            knobScroll,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(10)
+            }
+        )
 
         presetSpinner.onItemSelectedListener =
             object : AdapterView.OnItemSelectedListener {
+
                 override fun onNothingSelected(parent: AdapterView<*>?) {}
 
                 override fun onItemSelected(
@@ -327,9 +360,11 @@ class MainActivity : ComponentActivity() {
                     id: Long
                 ) {
                     val values = presets.values.elementAt(position)
-                    faders.forEachIndexed { i, fader ->
-                        fader.value = values[i]
+
+                    faders.forEachIndexed { index, control ->
+                        control.value = values[index]
                     }
+
                     updateEngine()
                 }
             }
@@ -379,6 +414,7 @@ class MainActivity : ComponentActivity() {
                         volumeValue.text = "$value%"
                         updateEngine()
                     }
+
                     override fun onStartTrackingTouch(seekBar: SeekBar?) {}
                     override fun onStopTrackingTouch(seekBar: SeekBar?) {}
                 }
@@ -421,6 +457,7 @@ class MainActivity : ComponentActivity() {
                         clarityValue.text = "$value%"
                         updateEngine()
                     }
+
                     override fun onStartTrackingTouch(seekBar: SeekBar?) {}
                     override fun onStopTrackingTouch(seekBar: SeekBar?) {}
                 }
@@ -615,12 +652,14 @@ class MainActivity : ComponentActivity() {
                 override fun beforeTextChanged(
                     s: CharSequence?, start: Int, count: Int, after: Int
                 ) {}
+
                 override fun onTextChanged(
                     s: CharSequence?, start: Int, before: Int, count: Int
                 ) {
                     exportNamePreview.text =
                         makeExportFileName(s?.toString().orEmpty(), "wav")
                 }
+
                 override fun afterTextChanged(s: android.text.Editable?) {}
             }
         )
@@ -807,7 +846,7 @@ class MainActivity : ComponentActivity() {
     // CONTROLES DEL MOTOR
 
     private fun gains(): FloatArray =
-        faders.map { it.value }.toFloatArray()
+        faders.map { control -> control.value }.toFloatArray()
 
     private fun updateEngine() {
 
@@ -1570,7 +1609,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// CONTROL VERTICAL DEL ECUALIZADOR
+// CONTROL VERTICAL ANTIGUO
+// Se conserva como clase auxiliar, pero ya no se utiliza en el ecualizador.
 
 class VerticalFader(context: android.content.Context) : View(context) {
 
