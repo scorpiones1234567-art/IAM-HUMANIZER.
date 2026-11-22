@@ -17,23 +17,21 @@ import java.nio.ByteOrder
 import kotlin.math.floor
 
 /**
- * I-A-M - DEMUCS VOICE PIPELINE 2.5
+ * I-A-M - DEMUCS VOICE PIPELINE 2.6
  *
  * Separa voz e instrumentos.
  * Limpia la voz con DeepFilterNet.
  * Reduce suavemente la estática instrumental cuando hay memoria.
- * Protege la voz original.
+ * Conserva parte de la voz original para evitar fluctuaciones.
  *
- * Optimización:
- * - Comprueba memoria antes de ejecutar el reductor.
- * - Evita copias innecesarias de las pistas.
- * - Libera referencias a arreglos temporales.
- * - Conserva los instrumentos originales si no hay memoria suficiente.
- *
- * Diagnósticos:
- * IAM_VOZ
- * IAM_INSTRUMENTOS
- * IAM_INSTRUMENTOS_LIMPIOS
+ * Optimizaciones:
+ * - Lee los instrumentos directamente desde los WAV por bloques.
+ * - Evita crear cinco ShortArray adicionales.
+ * - Evita crear una pista vocal adicional a 44.1 kHz.
+ * - Convierte de 48 kHz durante la mezcla final.
+ * - Comprueba memoria antes del filtro instrumental.
+ * - Libera referencias temporales tan pronto como es posible.
+ * - Comprueba las pistas y tamaños antes de mezclarlas.
  */
 object DemucsVoicePipeline {
 
@@ -47,8 +45,11 @@ object DemucsVoicePipeline {
 
     private const val INSTRUMENT_NOISE_STRENGTH = 0.30f
 
-    // Reserva conservadora para evitar agotar el heap durante el filtro.
-    private const val FILTER_RESERVED_MEMORY = 96L * 1024L * 1024L
+    // Margen adicional para el filtro instrumental.
+    private const val FILTER_RESERVED_MEMORY =
+        160L * 1024L * 1024L
+
+    private const val IO_BUFFER_SIZE = 64 * 1024
 
     private const val TAG = "IAM_PIPELINE"
 
@@ -83,9 +84,7 @@ object DemucsVoicePipeline {
         val workDir = File(appContext.cacheDir, "iam_demucs_work")
 
         if (workDir.exists()) {
-            check(workDir.deleteRecursively()) {
-                "No se pudo limpiar la carpeta temporal."
-            }
+            workDir.deleteRecursively()
         }
 
         check(workDir.mkdirs()) {
@@ -125,7 +124,10 @@ object DemucsVoicePipeline {
             NativeEngine.loadModel(model.absolutePath)
 
             // 3. Preparar audio.
-            onProgress?.invoke(20, "Preparando audio para separación")
+            onProgress?.invoke(
+                20,
+                "Preparando audio para separación"
+            )
 
             NativeEngine.prepareInput(
                 rawFile.absolutePath,
@@ -137,7 +139,10 @@ object DemucsVoicePipeline {
             checkNotInterrupted()
 
             // 4. Separar voz e instrumentos.
-            onProgress?.invoke(25, "Separando voz e instrumentos")
+            onProgress?.invoke(
+                25,
+                "Separando voz e instrumentos"
+            )
 
             NativeEngine.separate(
                 prepared = preparedFile.absolutePath,
@@ -152,15 +157,21 @@ object DemucsVoicePipeline {
                     25 + fraction.coerceIn(0f, 1f) * 45f
                 ).toInt()
 
-                onProgress?.invoke(percent, "Demucs: $stage")
+                onProgress?.invoke(
+                    percent,
+                    "Demucs: $stage"
+                )
 
                 !Thread.currentThread().isInterrupted
             }
 
             checkNotInterrupted()
 
-            // 5. Leer voz separada.
-            onProgress?.invoke(72, "Leyendo pistas separadas")
+            // 5. Leer únicamente la voz completa.
+            onProgress?.invoke(
+                72,
+                "Leyendo pista vocal"
+            )
 
             var vocalStereo = readPcm16StereoWav(
                 File(stemsDir, "vocals.wav")
@@ -172,8 +183,13 @@ object DemucsVoicePipeline {
                 "La pista vocal está vacía."
             }
 
-            // 6. Mezclar instrumentos separados.
-            onProgress?.invoke(74, "Mezclando instrumentos")
+            // 6. Preparar mezcla instrumental.
+            // Cada pista se lee directamente desde el disco
+            // en bloques pequeños.
+            onProgress?.invoke(
+                74,
+                "Mezclando instrumentos por bloques"
+            )
 
             var mix = FloatArray(vocalStereo.size)
 
@@ -195,15 +211,10 @@ object DemucsVoicePipeline {
                     "Falta la pista de instrumentos: $name"
                 }
 
-                val stem = readPcm16StereoWav(stemFile)
-
-                check(stem.size == mix.size) {
-                    "La duración de la pista $name no coincide."
-                }
-
-                for (i in mix.indices) {
-                    mix[i] += stem[i].toFloat() / 32768f
-                }
+                addPcm16StereoWavToFloat(
+                    file = stemFile,
+                    destination = mix
+                )
             }
 
             checkNotInterrupted()
@@ -222,20 +233,20 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            // 8. Reducción instrumental con protección de memoria.
+            // 8. Reducción instrumental con margen de memoria.
             onProgress?.invoke(
                 78,
                 "Comprobando memoria para limpiar instrumentos"
             )
 
             val requiredMemory =
-                mix.size.toLong() * 4L + FILTER_RESERVED_MEMORY
+                mix.size.toLong() * 4L +
+                FILTER_RESERVED_MEMORY
 
             val availableMemory = availableHeapBytes()
 
             var filterApplied = false
-
-            var cleanedInstruments: FloatArray = mix
+            var cleanedInstruments = mix
 
             if (availableMemory >= requiredMemory) {
 
@@ -245,16 +256,17 @@ object DemucsVoicePipeline {
                 )
 
                 try {
-                    cleanedInstruments = InstrumentNoiseReducer.reduce(
+                    val filtered = InstrumentNoiseReducer.reduce(
                         input = mix,
                         sampleRate = OUTPUT_RATE,
                         strength = INSTRUMENT_NOISE_STRENGTH
                     )
 
-                    check(cleanedInstruments.size == mix.size) {
+                    check(filtered.size == mix.size) {
                         "El filtro instrumental devolvió una duración incorrecta."
                     }
 
+                    cleanedInstruments = filtered
                     filterApplied = true
 
                     Log.i(
@@ -262,24 +274,23 @@ object DemucsVoicePipeline {
                         "Reducción instrumental aplicada."
                     )
 
-                } catch (e: OutOfMemoryError) {
+                } catch (error: OutOfMemoryError) {
 
                     Log.e(
                         TAG,
-                        "Memoria insuficiente para el filtro instrumental. Se conservarán los instrumentos originales.",
-                        e
+                        "Memoria insuficiente para el filtro instrumental.",
+                        error
                     )
 
                     cleanedInstruments = mix
-
                     System.gc()
 
-                } catch (e: Exception) {
+                } catch (error: Exception) {
 
                     Log.e(
                         TAG,
-                        "Falló la reducción instrumental. Se conservará el original.",
-                        e
+                        "Falló el filtro instrumental.",
+                        error
                     )
 
                     cleanedInstruments = mix
@@ -289,15 +300,19 @@ object DemucsVoicePipeline {
 
                 Log.w(
                     TAG,
-                    "Filtro omitido por memoria insuficiente. Disponible: $availableMemory bytes; requerido estimado: $requiredMemory bytes."
+                    "Filtro instrumental omitido por memoria. " +
+                        "Disponible: $availableMemory; " +
+                        "estimado necesario: $requiredMemory"
                 )
             }
 
             checkNotInterrupted()
 
-            // Soltar la referencia original.
-            // cleanedInstruments conserva los datos necesarios.
-            mix = FloatArray(0)
+            // Liberar la referencia original si el filtro
+            // generó una pista nueva.
+            if (cleanedInstruments !== mix) {
+                mix = FloatArray(0)
+            }
 
             // 9. Guardar diagnóstico instrumental.
             onProgress?.invoke(
@@ -316,7 +331,7 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            // 10. Preparar voz original en mono.
+            // 10. Convertir voz estéreo a mono.
             onProgress?.invoke(
                 81,
                 "Preparando voz para limpieza"
@@ -339,7 +354,7 @@ object DemucsVoicePipeline {
                         .toShort()
             }
 
-            // Ya no necesitamos la pista vocal estéreo.
+            // La pista estéreo ya no se necesita.
             vocalStereo = ShortArray(0)
 
             checkNotInterrupted()
@@ -351,14 +366,14 @@ object DemucsVoicePipeline {
             )
 
             var vocalMono48000 = resample(
-                vocalMono44100,
-                OUTPUT_RATE,
-                CLEAN_RATE
+                input = vocalMono44100,
+                inputRate = OUTPUT_RATE,
+                outputRate = CLEAN_RATE
             )
 
             checkNotInterrupted()
 
-            // 12. Limpieza neuronal de la voz.
+            // 12. Limpieza neuronal.
             onProgress?.invoke(
                 85,
                 "Limpiando ruido de la voz"
@@ -370,28 +385,27 @@ object DemucsVoicePipeline {
                 attenuationDb = attenuationDb.coerceIn(5f, 25f)
             )
 
-            // Soltar la entrada de DeepFilterNet.
+            // Liberar entrada de DeepFilterNet.
             vocalMono48000 = ShortArray(0)
+
+            check(cleaned48000.isNotEmpty()) {
+                "DeepFilterNet devolvió una pista vocal vacía."
+            }
 
             checkNotInterrupted()
 
-            // 13. Regresar voz a 44.1 kHz.
+            // 13. Mezclar sin crear cleaned44100.
+            // La conversión 48 kHz -> 44.1 kHz se realiza
+            // directamente mientras se genera la salida.
             onProgress?.invoke(
                 91,
                 "Preparando mezcla final"
             )
 
-            val cleaned44100 = resample(
-                cleaned48000,
-                CLEAN_RATE,
-                OUTPUT_RATE
-            )
+            check(cleanedInstruments.size == frameCount * 2) {
+                "La duración instrumental no coincide con la voz."
+            }
 
-            cleaned48000 = ShortArray(0)
-
-            checkNotInterrupted()
-
-            // 14. Mezclar instrumentos limpios y voz protegida.
             onProgress?.invoke(
                 94,
                 "Protegiendo voz y mezclando instrumentos"
@@ -399,21 +413,38 @@ object DemucsVoicePipeline {
 
             val output = ShortArray(cleanedInstruments.size)
 
+            val conversionRatio =
+                CLEAN_RATE.toDouble() / OUTPUT_RATE.toDouble()
+
             for (frame in 0 until frameCount) {
 
-                if (frame % 16384 == 0) {
+                if (frame % 8192 == 0) {
                     checkNotInterrupted()
                 }
 
                 val original =
                     vocalMono44100[frame].toFloat() / 32768f
 
-                val cleaned = if (frame < cleaned44100.size) {
-                    cleaned44100[frame].toFloat() / 32768f
-                } else {
-                    original
-                }
+                // Interpolación directa de 48 kHz a 44.1 kHz.
+                val position = frame * conversionRatio
 
+                val first = floor(position)
+                    .toInt()
+                    .coerceIn(0, cleaned48000.lastIndex)
+
+                val second = (first + 1)
+                    .coerceAtMost(cleaned48000.lastIndex)
+
+                val fraction = position - first
+
+                val cleanedSample =
+                    cleaned48000[first] * (1.0 - fraction) +
+                    cleaned48000[second] * fraction
+
+                val cleaned =
+                    (cleanedSample / 32768.0).toFloat()
+
+                // Protege la voz original.
                 val protectedVoice =
                     original * ORIGINAL_VOICE_MIX +
                     cleaned * CLEANED_VOICE_MIX
@@ -433,12 +464,32 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            onProgress?.invoke(100, "Procesamiento terminado")
+            // Liberar la referencia a la voz procesada.
+            cleaned48000 = ShortArray(0)
+
+            onProgress?.invoke(
+                100,
+                "Procesamiento terminado"
+            )
+
+            Log.i(
+                TAG,
+                "Pipeline terminado. Filtro instrumental: $filterApplied"
+            )
 
             return output
 
         } finally {
-            workDir.deleteRecursively()
+            // Los archivos temporales se eliminan al terminar.
+            try {
+                workDir.deleteRecursively()
+            } catch (error: Exception) {
+                Log.w(
+                    TAG,
+                    "No se pudo eliminar la carpeta temporal.",
+                    error
+                )
+            }
         }
     }
 
@@ -449,9 +500,12 @@ object DemucsVoicePipeline {
     private fun availableHeapBytes(): Long {
         val runtime = Runtime.getRuntime()
 
-        val used = runtime.totalMemory() - runtime.freeMemory()
+        val used =
+            runtime.totalMemory() - runtime.freeMemory()
 
-        return (runtime.maxMemory() - used).coerceAtLeast(0L)
+        return (
+            runtime.maxMemory() - used
+        ).coerceAtLeast(0L)
     }
 
     // ---------------------------------------------------------
@@ -464,7 +518,10 @@ object DemucsVoicePipeline {
         instruments: FloatArray
     ) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            Log.w(TAG, "Los diagnósticos requieren Android 10 o superior.")
+            Log.w(
+                TAG,
+                "Los diagnósticos requieren Android 10 o superior."
+            )
             return
         }
 
@@ -485,10 +542,17 @@ object DemucsVoicePipeline {
                 writeFloatStereoWav(output, instruments)
             }
 
-            Log.i(TAG, "Diagnósticos originales guardados.")
+            Log.i(
+                TAG,
+                "Diagnósticos originales guardados."
+            )
 
-        } catch (e: Exception) {
-            Log.e(TAG, "Error guardando diagnósticos originales.", e)
+        } catch (error: Exception) {
+            Log.e(
+                TAG,
+                "Error guardando diagnósticos originales.",
+                error
+            )
         }
     }
 
@@ -508,10 +572,17 @@ object DemucsVoicePipeline {
                 writeFloatStereoWav(output, instruments)
             }
 
-            Log.i(TAG, "Diagnóstico instrumental guardado.")
+            Log.i(
+                TAG,
+                "Diagnóstico instrumental guardado."
+            )
 
-        } catch (e: Exception) {
-            Log.e(TAG, "Error guardando instrumentos limpios.", e)
+        } catch (error: Exception) {
+            Log.e(
+                TAG,
+                "Error guardando instrumentos limpios.",
+                error
+            )
         }
     }
 
@@ -521,14 +592,26 @@ object DemucsVoicePipeline {
         writer: (OutputStream) -> Unit
     ) {
         val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
-            put(MediaStore.MediaColumns.MIME_TYPE, "audio/wav")
+            put(
+                MediaStore.MediaColumns.DISPLAY_NAME,
+                displayName
+            )
+
+            put(
+                MediaStore.MediaColumns.MIME_TYPE,
+                "audio/wav"
+            )
+
             put(
                 MediaStore.MediaColumns.RELATIVE_PATH,
                 Environment.DIRECTORY_DOWNLOADS +
                     "/I-A-M-Diagnostico"
             )
-            put(MediaStore.MediaColumns.IS_PENDING, 1)
+
+            put(
+                MediaStore.MediaColumns.IS_PENDING,
+                1
+            )
         }
 
         val resolver = context.contentResolver
@@ -552,18 +635,26 @@ object DemucsVoicePipeline {
             }
 
             val completed = ContentValues().apply {
-                put(MediaStore.MediaColumns.IS_PENDING, 0)
+                put(
+                    MediaStore.MediaColumns.IS_PENDING,
+                    0
+                )
             }
 
-            val updated = resolver.update(uri, completed, null, null)
+            val updated = resolver.update(
+                uri,
+                completed,
+                null,
+                null
+            )
 
             check(updated > 0) {
                 "No se pudo completar el archivo $displayName"
             }
 
-        } catch (e: Exception) {
+        } catch (error: Exception) {
             resolver.delete(uri, null, null)
-            throw e
+            throw error
         }
     }
 
@@ -575,16 +666,22 @@ object DemucsVoicePipeline {
         output: OutputStream,
         samples: ShortArray
     ) {
-        writeWavHeader(output, samples.size * 2)
+        val dataSize = samples.size.toLong() * 2L
+
+        writeWavHeader(output, dataSize)
 
         val buffer = ByteBuffer
-            .allocate(64 * 1024)
+            .allocate(IO_BUFFER_SIZE)
             .order(ByteOrder.LITTLE_ENDIAN)
 
         for (sample in samples) {
 
             if (buffer.remaining() < 2) {
-                output.write(buffer.array(), 0, buffer.position())
+                output.write(
+                    buffer.array(),
+                    0,
+                    buffer.position()
+                )
                 buffer.clear()
             }
 
@@ -592,7 +689,11 @@ object DemucsVoicePipeline {
         }
 
         if (buffer.position() > 0) {
-            output.write(buffer.array(), 0, buffer.position())
+            output.write(
+                buffer.array(),
+                0,
+                buffer.position()
+            )
         }
     }
 
@@ -600,16 +701,22 @@ object DemucsVoicePipeline {
         output: OutputStream,
         samples: FloatArray
     ) {
-        writeWavHeader(output, samples.size * 2)
+        val dataSize = samples.size.toLong() * 2L
+
+        writeWavHeader(output, dataSize)
 
         val buffer = ByteBuffer
-            .allocate(64 * 1024)
+            .allocate(IO_BUFFER_SIZE)
             .order(ByteOrder.LITTLE_ENDIAN)
 
         for (sample in samples) {
 
             if (buffer.remaining() < 2) {
-                output.write(buffer.array(), 0, buffer.position())
+                output.write(
+                    buffer.array(),
+                    0,
+                    buffer.position()
+                )
                 buffer.clear()
             }
 
@@ -617,16 +724,24 @@ object DemucsVoicePipeline {
         }
 
         if (buffer.position() > 0) {
-            output.write(buffer.array(), 0, buffer.position())
+            output.write(
+                buffer.array(),
+                0,
+                buffer.position()
+            )
         }
     }
 
     private fun writeWavHeader(
         output: OutputStream,
-        dataSize: Int
+        dataSize: Long
     ) {
-        require(dataSize >= 0) {
+        require(dataSize >= 0L) {
             "Tamaño de audio inválido."
+        }
+
+        require(dataSize <= 0xFFFFFFFFL - 36L) {
+            "El audio supera el tamaño máximo del formato WAV."
         }
 
         val header = ByteBuffer
@@ -634,18 +749,23 @@ object DemucsVoicePipeline {
             .order(ByteOrder.LITTLE_ENDIAN)
 
         header.put("RIFF".toByteArray(Charsets.US_ASCII))
-        header.putInt(36 + dataSize)
+        header.putInt((36L + dataSize).toInt())
+
         header.put("WAVE".toByteArray(Charsets.US_ASCII))
         header.put("fmt ".toByteArray(Charsets.US_ASCII))
+
         header.putInt(16)
         header.putShort(1.toShort())
         header.putShort(2.toShort())
+
         header.putInt(OUTPUT_RATE)
         header.putInt(OUTPUT_RATE * 2 * 2)
+
         header.putShort(4.toShort())
         header.putShort(16.toShort())
+
         header.put("data".toByteArray(Charsets.US_ASCII))
-        header.putInt(dataSize)
+        header.putInt(dataSize.toInt())
 
         output.write(header.array())
     }
@@ -659,7 +779,7 @@ object DemucsVoicePipeline {
         samples: ShortArray
     ) {
         val buffer = ByteBuffer
-            .allocate(64 * 1024)
+            .allocate(IO_BUFFER_SIZE)
             .order(ByteOrder.LITTLE_ENDIAN)
 
         FileOutputStream(file).use { output ->
@@ -667,15 +787,25 @@ object DemucsVoicePipeline {
             for (sample in samples) {
 
                 if (buffer.remaining() < 4) {
-                    output.write(buffer.array(), 0, buffer.position())
+                    output.write(
+                        buffer.array(),
+                        0,
+                        buffer.position()
+                    )
                     buffer.clear()
                 }
 
-                buffer.putFloat(sample.toFloat() / 32768f)
+                buffer.putFloat(
+                    sample.toFloat() / 32768f
+                )
             }
 
             if (buffer.position() > 0) {
-                output.write(buffer.array(), 0, buffer.position())
+                output.write(
+                    buffer.array(),
+                    0,
+                    buffer.position()
+                )
             }
 
             output.flush()
@@ -684,10 +814,146 @@ object DemucsVoicePipeline {
     }
 
     // ---------------------------------------------------------
-    // LECTOR WAV PCM 16 BITS ESTÉREO
+    // INFORMACIÓN DE WAV
     // ---------------------------------------------------------
 
-    private fun readPcm16StereoWav(file: File): ShortArray {
+    private data class WavDataInfo(
+        val dataStart: Long,
+        val dataSize: Long,
+        val channels: Int,
+        val bits: Int,
+        val format: Int,
+        val sampleRate: Long
+    )
+
+    private fun readWavDataInfo(
+        raf: RandomAccessFile
+    ): WavDataInfo {
+
+        require(raf.length() >= 12L) {
+            "Archivo WAV demasiado pequeño."
+        }
+
+        raf.seek(0)
+
+        val header = ByteArray(12)
+        raf.readFully(header)
+
+        require(
+            String(
+                header,
+                0,
+                4,
+                Charsets.US_ASCII
+            ) == "RIFF" &&
+            String(
+                header,
+                8,
+                4,
+                Charsets.US_ASCII
+            ) == "WAVE"
+        ) {
+            "El archivo no es un WAV válido."
+        }
+
+        var format = -1
+        var channels = -1
+        var bits = -1
+        var sampleRate = -1L
+
+        var dataStart = -1L
+        var dataSize = -1L
+
+        while (raf.filePointer + 8L <= raf.length()) {
+
+            val chunkId = ByteArray(4)
+            raf.readFully(chunkId)
+
+            val chunkSize = readUnsignedIntLE(raf)
+            val chunkName = String(
+                chunkId,
+                Charsets.US_ASCII
+            )
+
+            val chunkStart = raf.filePointer
+
+            require(chunkSize <= raf.length() - chunkStart) {
+                "Bloque WAV incompleto."
+            }
+
+            when (chunkName) {
+
+                "fmt " -> {
+                    require(chunkSize >= 16L) {
+                        "Formato WAV incompleto."
+                    }
+
+                    format = readUnsignedShortLE(raf)
+                    channels = readUnsignedShortLE(raf)
+                    sampleRate = readUnsignedIntLE(raf)
+
+                    // byteRate, blockAlign y bitsPerSample.
+                    raf.skipBytes(6)
+                    bits = readUnsignedShortLE(raf)
+                }
+
+                "data" -> {
+                    dataStart = chunkStart
+                    dataSize = chunkSize
+                }
+            }
+
+            val next =
+                chunkStart + chunkSize + (chunkSize and 1L)
+
+            if (next > raf.length()) break
+
+            raf.seek(next)
+
+            if (format >= 0 && dataStart >= 0L) break
+        }
+
+        require(format == 1) {
+            "La pista no es PCM sin comprimir."
+        }
+
+        require(channels == 2 && bits == 16) {
+            "La pista debe ser estéreo PCM de 16 bits."
+        }
+
+        require(sampleRate == OUTPUT_RATE.toLong()) {
+            "La pista instrumental no está a 44.1 kHz."
+        }
+
+        require(dataStart >= 0L && dataSize >= 0L) {
+            "El WAV no contiene datos de audio."
+        }
+
+        require(dataSize <= raf.length() - dataStart) {
+            "El bloque de audio está incompleto."
+        }
+
+        require(dataSize % 4L == 0L) {
+            "Los datos estéreo están incompletos."
+        }
+
+        return WavDataInfo(
+            dataStart = dataStart,
+            dataSize = dataSize,
+            channels = channels,
+            bits = bits,
+            format = format,
+            sampleRate = sampleRate
+        )
+    }
+
+    // ---------------------------------------------------------
+    // LECTOR DE VOZ WAV PCM 16 BITS ESTÉREO
+    // ---------------------------------------------------------
+
+    private fun readPcm16StereoWav(
+        file: File
+    ): ShortArray {
 
         require(file.isFile) {
             "No existe el archivo: ${file.name}"
@@ -695,91 +961,13 @@ object DemucsVoicePipeline {
 
         RandomAccessFile(file, "r").use { raf ->
 
-            require(raf.length() >= 44) {
-                "Archivo WAV demasiado pequeño: ${file.name}"
-            }
+            val info = readWavDataInfo(raf)
 
-            val header = ByteArray(12)
-            raf.readFully(header)
+            val sampleCountLong = info.dataSize / 2L
 
             require(
-                String(header, 0, 4, Charsets.US_ASCII) == "RIFF" &&
-                String(header, 8, 4, Charsets.US_ASCII) == "WAVE"
+                sampleCountLong in 1..Int.MAX_VALUE.toLong()
             ) {
-                "El archivo no es un WAV válido: ${file.name}"
-            }
-
-            var format = -1
-            var channels = -1
-            var bits = -1
-            var dataStart = -1L
-            var dataSize = -1L
-
-            while (raf.filePointer + 8 <= raf.length()) {
-
-                val chunkId = ByteArray(4)
-                raf.readFully(chunkId)
-
-                val chunkSize = readUnsignedIntLE(raf)
-                val chunkName = String(chunkId, Charsets.US_ASCII)
-                val chunkStart = raf.filePointer
-
-                when (chunkName) {
-
-                    "fmt " -> {
-                        require(chunkSize >= 16) {
-                            "Formato WAV incompleto."
-                        }
-
-                        format = readUnsignedShortLE(raf)
-                        channels = readUnsignedShortLE(raf)
-
-                        raf.skipBytes(4)
-                        raf.skipBytes(4)
-                        raf.skipBytes(2)
-
-                        bits = readUnsignedShortLE(raf)
-                    }
-
-                    "data" -> {
-                        dataStart = chunkStart
-                        dataSize = chunkSize
-                    }
-                }
-
-                val next = chunkStart + chunkSize +
-                    (chunkSize and 1L)
-
-                if (next > raf.length()) break
-
-                raf.seek(next)
-
-                if (format >= 0 && dataStart >= 0) break
-            }
-
-            require(format == 1) {
-                "La pista no es PCM sin comprimir."
-            }
-
-            require(channels == 2 && bits == 16) {
-                "La pista debe ser estéreo PCM de 16 bits."
-            }
-
-            require(dataStart >= 0 && dataSize >= 0) {
-                "El WAV no contiene datos de audio."
-            }
-
-            require(dataSize <= raf.length() - dataStart) {
-                "El bloque de audio está incompleto."
-            }
-
-            require(dataSize % 4L == 0L) {
-                "Los datos estéreo están incompletos."
-            }
-
-            val sampleCountLong = dataSize / 2L
-
-            require(sampleCountLong in 1..Int.MAX_VALUE.toLong()) {
                 "La pista es demasiado grande."
             }
 
@@ -791,13 +979,14 @@ object DemucsVoicePipeline {
 
             val result = ShortArray(sampleCount)
 
-            raf.seek(dataStart)
+            raf.seek(info.dataStart)
 
-            val bytes = ByteArray(64 * 1024)
+            val bytes = ByteArray(IO_BUFFER_SIZE)
+
             var index = 0
-            var remaining = dataSize
+            var remaining = info.dataSize
 
-            while (remaining >= 2 && index < result.size) {
+            while (remaining > 0L) {
 
                 checkNotInterrupted()
 
@@ -808,13 +997,19 @@ object DemucsVoicePipeline {
 
                 val evenCount = count - (count % 2)
 
-                raf.readFully(bytes, 0, evenCount)
+                require(evenCount > 0) {
+                    "Bloque PCM incompleto."
+                }
 
-                val buffer = ByteBuffer.wrap(
+                raf.readFully(
                     bytes,
                     0,
                     evenCount
-                ).order(ByteOrder.LITTLE_ENDIAN)
+                )
+
+                val buffer = ByteBuffer
+                    .wrap(bytes, 0, evenCount)
+                    .order(ByteOrder.LITTLE_ENDIAN)
 
                 while (buffer.remaining() >= 2) {
                     result[index++] = buffer.short
@@ -828,6 +1023,79 @@ object DemucsVoicePipeline {
             }
 
             return result
+        }
+    }
+
+    // ---------------------------------------------------------
+    // MEZCLA INSTRUMENTAL POR BLOQUES
+    // ---------------------------------------------------------
+
+    private fun addPcm16StereoWavToFloat(
+        file: File,
+        destination: FloatArray
+    ) {
+        require(file.isFile) {
+            "No existe la pista: ${file.name}"
+        }
+
+        RandomAccessFile(file, "r").use { raf ->
+
+            val info = readWavDataInfo(raf)
+
+            require(info.dataSize / 2L == destination.size.toLong()) {
+                "La duración de ${file.name} no coincide."
+            }
+
+            raf.seek(info.dataStart)
+
+            val bytes = ByteArray(IO_BUFFER_SIZE)
+
+            var index = 0
+            var remaining = info.dataSize
+
+            while (remaining > 0L) {
+
+                checkNotInterrupted()
+
+                val count = minOf(
+                    bytes.size.toLong(),
+                    remaining
+                ).toInt()
+
+                val evenCount = count - (count % 2)
+
+                require(evenCount > 0) {
+                    "Bloque instrumental incompleto."
+                }
+
+                raf.readFully(
+                    bytes,
+                    0,
+                    evenCount
+                )
+
+                val buffer = ByteBuffer
+                    .wrap(bytes, 0, evenCount)
+                    .order(ByteOrder.LITTLE_ENDIAN)
+
+                while (buffer.remaining() >= 2) {
+
+                    require(index < destination.size) {
+                        "La pista instrumental supera la duración esperada."
+                    }
+
+                    destination[index] +=
+                        buffer.short.toFloat() / 32768f
+
+                    index++
+                }
+
+                remaining -= evenCount
+            }
+
+            require(index == destination.size) {
+                "No se pudo mezclar toda la pista ${file.name}"
+            }
         }
     }
 
@@ -863,7 +1131,9 @@ object DemucsVoicePipeline {
         outputRate: Int
     ): ShortArray {
 
-        if (input.isEmpty()) return ShortArray(0)
+        if (input.isEmpty()) {
+            return ShortArray(0)
+        }
 
         if (inputRate == outputRate) {
             return input.copyOf()
@@ -875,12 +1145,16 @@ object DemucsVoicePipeline {
                 inputRate.toDouble()
         ).toLong()
 
-        require(outputSizeLong in 1..Int.MAX_VALUE.toLong()) {
+        require(
+            outputSizeLong in 1..Int.MAX_VALUE.toLong()
+        ) {
             "El audio remuestreado es demasiado grande."
         }
 
         val output = ShortArray(outputSizeLong.toInt())
-        val ratio = inputRate.toDouble() / outputRate
+
+        val ratio =
+            inputRate.toDouble() / outputRate.toDouble()
 
         for (i in output.indices) {
 
@@ -890,7 +1164,8 @@ object DemucsVoicePipeline {
 
             val position = i * ratio
 
-            val first = floor(position).toInt()
+            val first = floor(position)
+                .toInt()
                 .coerceIn(0, input.lastIndex)
 
             val second = (first + 1)
