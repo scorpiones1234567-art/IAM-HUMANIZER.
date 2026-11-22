@@ -9,9 +9,8 @@ import kotlin.math.pow
 import kotlin.math.sin
 
 /**
- * I-A-M MOTOR MUSICAL 2.2
- * Procesamiento compartido para reproducción y exportación.
- * Permite actualizar los controles durante la reproducción.
+ * I-A-M MOTOR MUSICAL 2.3
+ * Bypass transparente cuando no hay efectos activos.
  */
 class AudioProcessor(
     private val sampleRate: Int,
@@ -124,6 +123,20 @@ class AudioProcessor(
         rebuildFilters()
     }
 
+    /**
+     * Comprueba si todos los controles están neutros.
+     */
+    private fun isTransparent(settings: Settings): Boolean {
+        return settings.equalizer.all { abs(it) < 0.001f } &&
+            !settings.bassEnabled &&
+            !settings.reverbEnabled &&
+            !settings.stereoEnabled &&
+            settings.volumePercent == 100 &&
+            settings.vocalClarity == 0 &&
+            settings.noiseReduction <= 0f &&
+            !settings.humRemoval
+    }
+
     private fun sameSettings(a: Settings, b: Settings): Boolean {
         return a.equalizer.contentEquals(b.equalizer) &&
             a.bassEnabled == b.bassEnabled &&
@@ -135,10 +148,6 @@ class AudioProcessor(
             a.humRemoval == b.humRemoval
     }
 
-    /**
-     * Actualiza los efectos sin detener la reproducción.
-     * Solo reconstruye filtros cuando realmente cambian los ajustes.
-     */
     @Synchronized
     fun updateSettings(newSettings: Settings) {
         val safeSettings = newSettings.copy(
@@ -207,10 +216,6 @@ class AudioProcessor(
         }
     }
 
-    /**
-     * Procesa un bloque PCM de 16 bits.
-     * Los ajustes pueden actualizarse entre bloques.
-     */
     @Synchronized
     fun process(input: ShortArray): ShortArray {
         if (input.isEmpty()) return ShortArray(0)
@@ -220,6 +225,14 @@ class AudioProcessor(
         }
 
         val active = currentSettings
+
+        // IMPORTANTE:
+        // Sin efectos, devuelve una copia exacta de las muestras.
+        // No aplica limitador, filtros ni cambios de volumen.
+        if (isTransparent(active)) {
+            return input.copyOf()
+        }
+
         val output = ShortArray(input.size)
         val frames = input.size / channels
 
