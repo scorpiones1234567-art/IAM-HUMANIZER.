@@ -9,10 +9,11 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * I-A-M - LIMPIADOR NEURONAL DE VOZ 2.1
+ * I-A-M - LIMPIADOR NEURONAL DE VOZ 2.2
  *
- * Limpieza vocal moderada para conservar
- * las sílabas y los finales de las palabras.
+ * Limpieza vocal reforzada.
+ * Conserva bloques completos y evita recortar
+ * las sílabas finales de las palabras.
  *
  * Entrada: PCM 16 bits, mono, 48 kHz.
  */
@@ -21,7 +22,7 @@ object DeepFilterVoiceCleaner {
     fun clean(
         context: Context,
         vocal48kMono: ShortArray,
-        attenuationDb: Float = 15f
+        attenuationDb: Float = 20f
     ): ShortArray {
 
         require(vocal48kMono.isNotEmpty()) {
@@ -91,7 +92,7 @@ object DeepFilterVoiceCleaner {
                         0
                     }
 
-                    frameBuffer.putShort(sample.toShort())
+                    frameBuffer.putShort(sample)
                 }
 
                 frameBuffer.flip()
