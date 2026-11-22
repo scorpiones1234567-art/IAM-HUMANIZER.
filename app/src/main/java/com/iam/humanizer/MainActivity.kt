@@ -1274,95 +1274,95 @@ class MainActivity : ComponentActivity() {
 
     // DECODIFICADOR
 
-    private fun decode(uri: Uri): Decoded {
+    
+private fun decode(uri: Uri): Decoded {
 
-        val extractor = MediaExtractor()
-        var codec: MediaCodec? = null
+    val extractor = MediaExtractor()
+    var codec: MediaCodec? = null
 
-        try {
-            extractor.setDataSource(this, uri, null)
+    try {
+        extractor.setDataSource(this, uri, null)
 
-            var track = -1
-            var format: MediaFormat? = null
+        var track = -1
+        var format: MediaFormat? = null
 
-            for (i in 0 until extractor.trackCount) {
-                val candidate = extractor.getTrackFormat(i)
+        for (i in 0 until extractor.trackCount) {
+            val candidate = extractor.getTrackFormat(i)
+            val mime = candidate.getString(MediaFormat.KEY_MIME) ?: ""
 
-                if ((candidate.getString(MediaFormat.KEY_MIME) ?: "")
-                    .startsWith("audio/")
-                ) {
-                    track = i
-                    format = candidate
-                    break
-                }
+            if (mime.startsWith("audio/")) {
+                track = i
+                format = candidate
+                break
             }
+        }
 
-            if (track < 0 || format == null) {
-                throw Exception("No se encontró audio.")
-            }
+        if (track < 0 || format == null) {
+            throw Exception("No se encontró una pista de audio.")
+        }
 
-            extractor.selectTrack(track)
+        extractor.selectTrack(track)
 
-            val mime = format.getString(MediaFormat.KEY_MIME)
-                ?: throw Exception("Formato desconocido.")
+        val mime = format.getString(MediaFormat.KEY_MIME)
+            ?: throw Exception("Formato de audio desconocido.")
 
-            codec = MediaCodec.createDecoderByType(mime)
-            codec.configure(format, null, null, 0)
-            codec.start()
+        codec = MediaCodec.createDecoderByType(mime)
+        codec.configure(format, null, null, 0)
+        codec.start()
 
-            val output = ByteArrayOutputStream()
-            val info = MediaCodec.BufferInfo()
+        val output = ByteArrayOutputStream()
+        val info = MediaCodec.BufferInfo()
 
-            var inputDone = false
-            var outputDone = false
+        var inputDone = false
+        var outputDone = false
 
-            var sr = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-            var ch = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-            var encoding = AudioFormat.ENCODING_PCM_16BIT
+        var sr = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+        var ch = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+        var encoding = AudioFormat.ENCODING_PCM_16BIT
 
-            while (!outputDone) {
+        while (!outputDone) {
 
-                if (!inputDone) {
-                    val index = codec.dequeueInputBuffer(10000)
+            if (!inputDone) {
+                val inputIndex = codec.dequeueInputBuffer(10000)
 
-                    if (index >= 0) {
-                        val input = codec.getInputBuffer(index)
-                            ?: throw Exception("Error leyendo audio.")
+                if (inputIndex >= 0) {
+                    val inputBuffer = codec.getInputBuffer(inputIndex)
+                        ?: throw Exception("No se pudo leer el audio.")
 
-                        input.clear()
+                    inputBuffer.clear()
 
-                        val size = extractor.readSampleData(input, 0)
+                    val size = extractor.readSampleData(inputBuffer, 0)
 
-                        if (size < 0) {
-                            codec.queueInputBuffer(
-                                index,
-                                0,
-                                0,
-                                0,
-                                MediaCodec.BUFFER_FLAG_END_OF_STREAM
-                            )
-                            inputDone = true
-
-                        } else {
-                            codec.queueInputBuffer(
-                                index,
-                                0,
-                                size,
-                                extractor.sampleTime,
-                                0
-                            )
-                            extractor.advance()
-                        }
+                    if (size < 0) {
+                        codec.queueInputBuffer(
+                            inputIndex,
+                            0,
+                            0,
+                            0,
+                            MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                        )
+                        inputDone = true
+                    } else {
+                        codec.queueInputBuffer(
+                            inputIndex,
+                            0,
+                            size,
+                            extractor.sampleTime,
+                            0
+                        )
+                        extractor.advance()
                     }
                 }
+            }
 
-                val outIndex = codec.dequeueOutputBuffer(info, 10000)
+            val outputIndex = codec.dequeueOutputBuffer(info, 10000)
 
-                when {
+            when {
 
-                    outIndex >= 0 -> {
+                outputIndex >= 0 -> {
 
-                        val buffer = codec.getOutputBuffer(outIndex)
+                    try {
+                        val buffer = codec.getOutputBuffer(outputIndex)
 
                         if (buffer != null && info.size > 0) {
 
@@ -1380,104 +1380,171 @@ class MainActivity : ComponentActivity() {
                                 encoding = fmt.getInteger(MediaFormat.KEY_PCM_ENCODING)
                             }
 
+                            if (info.offset < 0 ||
+                                info.size < 0 ||
+                                info.offset + info.size > buffer.capacity()
+                            ) {
+                                throw Exception("Bloque de audio inválido.")
+                            }
+
+                            if (output.size().toLong() + info.size >
+                                100L * 1024L * 1024L
+                            ) {
+                                throw Exception(
+                                    "Audio demasiado grande: límite 100 MB."
+                                )
+                            }
+
                             buffer.position(info.offset)
                             buffer.limit(info.offset + info.size)
 
                             val chunk = ByteArray(info.size)
                             buffer.get(chunk)
                             output.write(chunk)
-
-                            if (output.size() > 100 * 1024 * 1024) {
-                                throw Exception(
-                                    "Audio demasiado grande: límite 100 MB."
-                                )
-                            }
                         }
 
-                        val ended =
-                            info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
-
-                        codec.releaseOutputBuffer(outIndex, false)
-
-                        if (ended) outputDone = true
-                    }
-
-                    outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-
-                        val fmt = codec.outputFormat
-
-                        sr = fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-                        ch = fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-
-                        if (fmt.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
-                            encoding = fmt.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                        if (info.flags and
+                            MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                        ) {
+                            outputDone = true
                         }
-                    }
-                }
-            }
 
-            if (ch !in 1..2 || sr !in 8000..192000) {
-                throw Exception("Formato de audio no compatible.")
-            }
-
-            val bytes = output.toByteArray()
-
-            val buffer = ByteBuffer.wrap(bytes)
-                .order(ByteOrder.nativeOrder())
-
-            val samples = when (encoding) {
-
-                AudioFormat.ENCODING_PCM_16BIT -> {
-
-                    if (bytes.size % 2 != 0) {
-                        throw Exception("Audio PCM incompleto.")
-                    }
-
-                    ShortArray(bytes.size / 2) {
-                        buffer.short
+                    } finally {
+                        codec.releaseOutputBuffer(outputIndex, false)
                     }
                 }
 
-                AudioFormat.ENCODING_PCM_FLOAT -> {
+                outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
 
-                    if (bytes.size % 4 != 0) {
-                        throw Exception("Audio PCM incompleto.")
-                    }
+                    val fmt = codec.outputFormat
 
-                    ShortArray(bytes.size / 4) {
-                        (buffer.float.coerceIn(-1f, 1f) * 32767f)
-                            .toInt().toShort()
-                    }
-                }
+                    sr = fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                    ch = fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
 
-                AudioFormat.ENCODING_PCM_8BIT -> {
-
-                    ShortArray(bytes.size) {
-                        (((bytes[it].toInt() and 255) - 128) shl 8).toShort()
+                    if (fmt.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
+                        encoding = fmt.getInteger(MediaFormat.KEY_PCM_ENCODING)
                     }
                 }
-
-                else -> throw Exception("PCM no compatible.")
             }
-
-            if (samples.isEmpty() || samples.size % ch != 0) {
-                throw Exception("La canción no contiene audio válido.")
-            }
-
-            return Decoded(samples, sr, ch)
-
-        } finally {
-            try {
-                codec?.stop()
-            } catch (_: Exception) {}
-
-            try {
-                codec?.release()
-            } catch (_: Exception) {}
-
-            extractor.release()
         }
+
+        if (ch !in 1..2 || sr !in 8000..192000) {
+            throw Exception("Frecuencia o canales de audio no compatibles.")
+        }
+
+        val bytes = output.toByteArray()
+
+        if (bytes.isEmpty()) {
+            throw Exception("El archivo no contiene audio.")
+        }
+
+        // Android entrega PCM en orden little-endian.
+        val buffer = ByteBuffer.wrap(bytes)
+            .order(ByteOrder.LITTLE_ENDIAN)
+
+        val samples: ShortArray = when (encoding) {
+
+            AudioFormat.ENCODING_PCM_16BIT -> {
+
+                if (bytes.size % 2 != 0) {
+                    throw Exception("Audio PCM de 16 bits incompleto.")
+                }
+
+                ShortArray(bytes.size / 2) {
+                    buffer.short
+                }
+            }
+
+            AudioFormat.ENCODING_PCM_FLOAT -> {
+
+                if (bytes.size % 4 != 0) {
+                    throw Exception("Audio PCM flotante incompleto.")
+                }
+
+                ShortArray(bytes.size / 4) {
+                    val value = buffer.float
+
+                    val safeValue = if (value.isFinite()) {
+                        value.coerceIn(-1f, 1f)
+                    } else {
+                        0f
+                    }
+
+                    (safeValue * 32767f).toInt().toShort()
+                }
+            }
+
+            AudioFormat.ENCODING_PCM_8BIT -> {
+
+                ShortArray(bytes.size) {
+                    val unsignedValue = bytes[it].toInt() and 0xFF
+                    ((unsignedValue - 128) shl 8).toShort()
+                }
+            }
+
+            AudioFormat.ENCODING_PCM_24BIT_PACKED -> {
+
+                if (bytes.size % 3 != 0) {
+                    throw Exception("Audio PCM de 24 bits incompleto.")
+                }
+
+                ShortArray(bytes.size / 3) {
+                    val b0 = buffer.get().toInt() and 0xFF
+                    val b1 = buffer.get().toInt() and 0xFF
+                    val b2 = buffer.get().toInt() and 0xFF
+
+                    var value = b0 or (b1 shl 8) or (b2 shl 16)
+
+                    if ((value and 0x800000) != 0) {
+                        value = value or -0x1000000
+                    }
+
+                    (value shr 8).toShort()
+                }
+            }
+
+            AudioFormat.ENCODING_PCM_32BIT -> {
+
+                if (bytes.size % 4 != 0) {
+                    throw Exception("Audio PCM de 32 bits incompleto.")
+                }
+
+                ShortArray(bytes.size / 4) {
+                    (buffer.int shr 16).toShort()
+                }
+            }
+
+            else -> {
+                throw Exception("Formato PCM no compatible: $encoding")
+            }
+        }
+
+        if (samples.isEmpty() || samples.size % ch != 0) {
+            throw Exception("Las muestras de audio están incompletas.")
+        }
+
+        return Decoded(
+            samples = samples,
+            sampleRate = sr,
+            channelCount = ch
+        )
+
+    } finally {
+
+        try {
+            codec?.stop()
+        } catch (_: Exception) {
+        }
+
+        try {
+            codec?.release()
+        } catch (_: Exception) {
+        }
+
+        extractor.release()
     }
+}
+
 
     // FILTROS DIGITALES
 
