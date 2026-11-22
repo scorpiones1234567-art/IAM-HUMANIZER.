@@ -2,36 +2,43 @@
 package com.iam.humanizer
 
 import kotlin.math.PI
-import kotlin.math.ceil
 import kotlin.math.cos
-import kotlin.math.floor
 import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * I-A-M - INSTRUMENT NOISE REDUCER 2.0
+ * I-A-M - INSTRUMENT NOISE REDUCER 2.1
  *
- * Procesamiento espectral por bloques de aproximadamente 4 segundos.
- * Reduce memoria temporal y conserva la fase del audio.
+ * Reducción espectral conservadora.
+ * Suaviza las ganancias entre tramas para evitar
+ * artefactos, sonido metálico y cambios bruscos.
  *
- * Entrada: FloatArray estéreo intercalado, 44.1 kHz.
- * No procesa la voz.
+ * Entrada: FloatArray estéreo intercalado.
+ * No procesa directamente la pista vocal.
  */
 object InstrumentNoiseReducer {
 
     private const val FFT_SIZE = 1024
     private const val HOP_SIZE = 512
+
     private const val NOISE_PERCENT = 0.08f
-    private const val NOISE_MULTIPLIER = 2.2f
-    private const val MIN_GAIN = 0.55f
-    private const val DEFAULT_STRENGTH = 0.30f
-    private const val MIN_FREQUENCY = 2800f
+    private const val NOISE_MULTIPLIER = 2.8f
+
+    private const val MIN_GAIN = 0.78f
+    private const val DEFAULT_STRENGTH = 0.15f
+
+    private const val MIN_FREQUENCY = 4000f
     private const val CHUNK_SECONDS = 4
 
+    private const val ATTACK_SMOOTHING = 0.35f
+    private const val RELEASE_SMOOTHING = 0.08f
+
     private val window = FloatArray(FFT_SIZE) { i ->
-        (0.5 - 0.5 * cos(
-            2.0 * PI * i / (FFT_SIZE - 1)
-        )).toFloat()
+        (
+            0.5 - 0.5 * cos(
+                2.0 * PI * i / (FFT_SIZE - 1)
+            )
+        ).toFloat()
     }
 
     fun reduce(
@@ -56,31 +63,33 @@ object InstrumentNoiseReducer {
             return input.copyOf()
         }
 
-        val safeStrength = strength.coerceIn(0f, 0.60f)
+        val safeStrength = strength.coerceIn(0f, 0.15f)
 
-        if (safeStrength == 0f) {
+        if (safeStrength <= 0f) {
             return input.copyOf()
         }
 
         val frameCount =
             (sampleCount + HOP_SIZE - 1) / HOP_SIZE + 1
 
-        // Solo guarda una medida pequeña por bloque.
+        // Energía por trama.
         val frameEnergy = FloatArray(frameCount)
 
-        // 1. Analizar energía de los bloques.
         for (frame in 0 until frameCount) {
 
             checkNotInterrupted()
 
             val start = frame * HOP_SIZE - FFT_SIZE / 2
+
             var sum = 0.0
             var count = 0
 
             for (i in 0 until FFT_SIZE) {
+
                 val position = start + i
 
                 if (position in 0 until sampleCount) {
+
                     val left = input[position * 2].toDouble()
                     val right = input[position * 2 + 1].toDouble()
 
@@ -96,7 +105,7 @@ object InstrumentNoiseReducer {
             }
         }
 
-        // 2. Seleccionar los bloques de menor energía.
+        // Seleccionar las tramas de menor energía.
         val selectedCount = (
             frameCount * NOISE_PERCENT
         ).toInt().coerceAtLeast(8).coerceAtMost(frameCount)
@@ -105,13 +114,14 @@ object InstrumentNoiseReducer {
             .sortedBy { frameEnergy[it] }
             .take(selectedCount)
 
-        // 3. Crear perfil de ruido.
         val bins = FFT_SIZE / 2 + 1
+
         val noiseProfile = FloatArray(bins)
 
         val real = DoubleArray(FFT_SIZE)
         val imaginary = DoubleArray(FFT_SIZE)
 
+        // Construir perfil de ruido.
         for (frame in selectedFrames) {
 
             checkNotInterrupted()
@@ -124,6 +134,7 @@ object InstrumentNoiseReducer {
                 imaginary.fill(0.0)
 
                 for (i in 0 until FFT_SIZE) {
+
                     val position = start + i
 
                     val sample = if (
@@ -140,6 +151,7 @@ object InstrumentNoiseReducer {
                 fft(real, imaginary, false)
 
                 for (bin in 0 until bins) {
+
                     noiseProfile[bin] += sqrt(
                         real[bin] * real[bin] +
                         imaginary[bin] * imaginary[bin]
@@ -154,14 +166,16 @@ object InstrumentNoiseReducer {
             noiseProfile[bin] /= divisor
         }
 
-        // Suavizar el perfil de ruido.
+        // Suavizar perfil de ruido por frecuencia.
         val smoothNoise = FloatArray(bins)
 
         for (bin in 0 until bins) {
+
             var sum = 0f
             var count = 0
 
             for (offset in -2..2) {
+
                 val index = bin + offset
 
                 if (index in 0 until bins) {
@@ -173,23 +187,25 @@ object InstrumentNoiseReducer {
             smoothNoise[bin] = sum / count
         }
 
-        // Una sola matriz grande de salida.
-        // Ya no se crean matrices completas para L, R y pesos.
         val output = FloatArray(input.size)
 
         val rawGain = FloatArray(bins)
         val smoothedGain = FloatArray(bins)
 
+        // Memoria pequeña para suavizar entre tramas.
+        val previousGain = Array(2) {
+            FloatArray(bins) { 1f }
+        }
+
         val minimumBin = (
             MIN_FREQUENCY / sampleRate * FFT_SIZE
         ).toInt().coerceIn(1, bins - 1)
 
-        // Cantidad de tramas que se procesan por grupo.
         val framesPerChunk = (
             sampleRate * CHUNK_SECONDS / HOP_SIZE
         ).coerceAtLeast(1)
 
-        // 4. Procesamiento por bloques.
+        // Procesamiento espectral por bloques.
         var chunkStart = 0
 
         while (chunkStart < frameCount) {
@@ -214,8 +230,9 @@ object InstrumentNoiseReducer {
                     real.fill(0.0)
                     imaginary.fill(0.0)
 
-                    // Ventana de análisis.
+                    // Análisis de la trama.
                     for (i in 0 until FFT_SIZE) {
+
                         val position = start + i
 
                         val sample = if (
@@ -231,7 +248,7 @@ object InstrumentNoiseReducer {
 
                     fft(real, imaginary, false)
 
-                    // Calcular ganancias espectrales.
+                    // Calcular reducción conservadora.
                     for (bin in 0 until bins) {
 
                         if (bin < minimumBin) {
@@ -262,13 +279,14 @@ object InstrumentNoiseReducer {
                         ).coerceAtLeast(MIN_GAIN)
                     }
 
-                    // Suavizar ganancias entre frecuencias.
+                    // Suavizar entre frecuencias.
                     for (bin in 0 until bins) {
 
                         var sum = 0f
                         var count = 0
 
                         for (offset in -2..2) {
+
                             val index = bin + offset
 
                             if (index in 0 until bins) {
@@ -280,6 +298,26 @@ object InstrumentNoiseReducer {
                         smoothedGain[bin] = sum / count
                     }
 
+                    // Suavizar también entre tramas.
+                    // Evita que la reducción entre y salga bruscamente.
+                    for (bin in 0 until bins) {
+
+                        val target = smoothedGain[bin]
+                        val previous = previousGain[channel][bin]
+
+                        val coefficient = if (target < previous) {
+                            ATTACK_SMOOTHING
+                        } else {
+                            RELEASE_SMOOTHING
+                        }
+
+                        val stable = previous +
+                            (target - previous) * coefficient
+
+                        smoothedGain[bin] = stable
+                        previousGain[channel][bin] = stable
+                    }
+
                     // Aplicar ganancia conservando la fase.
                     for (bin in 0 until bins) {
 
@@ -289,6 +327,7 @@ object InstrumentNoiseReducer {
                         imaginary[bin] *= gain
 
                         if (bin > 0 && bin < FFT_SIZE / 2) {
+
                             val mirror = FFT_SIZE - bin
 
                             real[mirror] *= gain
@@ -298,7 +337,7 @@ object InstrumentNoiseReducer {
 
                     fft(real, imaginary, true)
 
-                    // Reconstruir directamente en la salida.
+                    // Reconstrucción.
                     for (i in 0 until FFT_SIZE) {
 
                         val position = start + i
@@ -317,7 +356,7 @@ object InstrumentNoiseReducer {
             chunkStart = chunkEnd
         }
 
-        // 5. Normalizar el solapamiento sin otra matriz gigante.
+        // Normalizar solapamiento.
         for (position in 0 until sampleCount) {
 
             if (position % 32768 == 0) {
@@ -339,6 +378,7 @@ object InstrumentNoiseReducer {
                 val windowIndex = position - start
 
                 if (windowIndex in 0 until FFT_SIZE) {
+
                     val value = window[windowIndex]
                     weight += value * value
                 }
@@ -348,9 +388,12 @@ object InstrumentNoiseReducer {
             val rightIndex = leftIndex + 1
 
             if (weight > 0.000001f) {
+
                 output[leftIndex] /= weight
                 output[rightIndex] /= weight
+
             } else {
+
                 output[leftIndex] = input[leftIndex]
                 output[rightIndex] = input[rightIndex]
             }
@@ -367,6 +410,7 @@ object InstrumentNoiseReducer {
         imaginary: DoubleArray,
         inverse: Boolean
     ) {
+
         val n = real.size
 
         var j = 0
@@ -383,6 +427,7 @@ object InstrumentNoiseReducer {
             j = j xor bit
 
             if (i < j) {
+
                 val tempReal = real[i]
                 real[i] = real[j]
                 real[j] = tempReal
@@ -436,6 +481,7 @@ object InstrumentNoiseReducer {
                     imaginary[odd] = evenImaginary - oddImaginary
 
                     val nextWr = wr * rootReal - wi * rootImaginary
+
                     wi = wr * rootImaginary + wi * rootReal
                     wr = nextWr
                 }
@@ -447,6 +493,7 @@ object InstrumentNoiseReducer {
         }
 
         if (inverse) {
+
             val scale = 1.0 / n
 
             for (i in 0 until n) {
@@ -457,7 +504,9 @@ object InstrumentNoiseReducer {
     }
 
     private fun checkNotInterrupted() {
+
         if (Thread.currentThread().isInterrupted) {
+
             throw InterruptedException(
                 "Procesamiento cancelado."
             )
