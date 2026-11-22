@@ -9,20 +9,19 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * I-A-M - LIMPIADOR NEURONAL DE VOZ
+ * I-A-M - LIMPIADOR NEURONAL DE VOZ 2.1
  *
- * Recibe audio mono PCM de 16 bits a 48 kHz.
- * Procesa la voz con DeepFilterNet.
+ * Limpieza vocal moderada para conservar
+ * las sílabas y los finales de las palabras.
  *
- * Debe ejecutarse desde un hilo de trabajo,
- * nunca desde el hilo principal de Android.
+ * Entrada: PCM 16 bits, mono, 48 kHz.
  */
 object DeepFilterVoiceCleaner {
 
     fun clean(
         context: Context,
         vocal48kMono: ShortArray,
-        attenuationDb: Float = 50f
+        attenuationDb: Float = 15f
     ): ShortArray {
 
         require(vocal48kMono.isNotEmpty()) {
@@ -52,10 +51,9 @@ object DeepFilterVoiceCleaner {
                 "DeepFilterNet devolvió un tamaño de bloque inválido."
             }
 
-            if (!filter.setAttenuationLimit(
-                    attenuationDb.coerceIn(0f, 100f)
-                )
-            ) {
+            val safeAttenuation = attenuationDb.coerceIn(5f, 25f)
+
+            if (!filter.setAttenuationLimit(safeAttenuation)) {
                 throw IllegalStateException(
                     "No se pudo configurar la reducción de ruido."
                 )
@@ -72,6 +70,12 @@ object DeepFilterVoiceCleaner {
             var outputPosition = 0
 
             while (sourcePosition < vocal48kMono.size) {
+
+                if (Thread.currentThread().isInterrupted) {
+                    throw InterruptedException(
+                        "Limpieza de voz cancelada."
+                    )
+                }
 
                 frameBuffer.clear()
 
@@ -97,8 +101,7 @@ object DeepFilterVoiceCleaner {
                 frameBuffer.rewind()
 
                 repeat(available) {
-                    result[outputPosition++] =
-                        frameBuffer.short
+                    result[outputPosition++] = frameBuffer.short
                 }
 
                 sourcePosition += available
