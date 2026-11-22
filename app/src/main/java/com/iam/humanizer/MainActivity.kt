@@ -1042,7 +1042,7 @@ class MainActivity : ComponentActivity() {
                     input = source,
                     sampleRate = originalRate,
                     channels = originalChannels,
-                    attenuationDb = 50f,
+                    attenuationDb = 20f,
                     onProgress = { percent, stage ->
 
                         handler.post {
