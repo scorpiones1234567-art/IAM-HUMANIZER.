@@ -1,36 +1,45 @@
 
 package com.iam.humanizer
 
+import android.content.ContentValues
 import android.content.Context
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import android.util.Log
 import io.github.jpaauwe.demucsengine.NativeEngine
 import java.io.File
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.floor
 
 /**
- * I-A-M - DEMUCS VOICE PIPELINE 2.2
+ * I-A-M - DEMUCS VOICE PIPELINE 2.3
  *
  * Separa voz e instrumentos.
  * Limpia la voz con DeepFilterNet.
  * Protege la voz mediante una mezcla controlada.
  *
- * Entrada: PCM 16 bits, mono o estéreo.
- * Salida: PCM 16 bits, estéreo, 44.1 kHz.
+ * Guarda dos pistas de diagnóstico en Descargas:
+ * IAM_VOZ.wav
+ * IAM_INSTRUMENTOS.wav
+ *
+ * El audio final conserva el procesamiento anterior.
  */
 object DemucsVoicePipeline {
 
     private const val OUTPUT_RATE = 44100
     private const val CLEAN_RATE = 48000
 
-    // Limpieza neuronal reforzada.
     private const val DEFAULT_ATTENUATION_DB = 20f
 
-    // Mezcla vocal: 35% original + 65% limpia.
     private const val ORIGINAL_VOICE_MIX = 0.35f
     private const val CLEANED_VOICE_MIX = 0.65f
+
+    private const val TAG = "IAM_DIAGNOSTICO"
 
     fun process(
         context: Context,
@@ -86,7 +95,7 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            // 2. Descargar y cargar modelo.
+            // 2. Cargar modelo Demucs.
             onProgress?.invoke(5, "Comprobando modelo Demucs")
 
             val model = DemucsModelManager.getModel(appContext) {
@@ -103,7 +112,7 @@ object DemucsVoicePipeline {
 
             NativeEngine.loadModel(model.absolutePath)
 
-            // 3. Preparar audio para Demucs.
+            // 3. Preparar audio.
             onProgress?.invoke(20, "Preparando audio para separación")
 
             NativeEngine.prepareInput(
@@ -153,7 +162,7 @@ object DemucsVoicePipeline {
             val vocalStereo = readPcm16StereoWav(vocalsFile)
             val frameCount = vocalStereo.size / 2
 
-            // Mezcla de instrumentos.
+            // 6. Mezclar instrumentos separados.
             val mix = FloatArray(vocalStereo.size)
 
             val instrumentNames = listOf(
@@ -165,6 +174,7 @@ object DemucsVoicePipeline {
             )
 
             for (name in instrumentNames) {
+
                 checkNotInterrupted()
 
                 val stemFile = File(stemsDir, "$name.wav")
@@ -184,12 +194,28 @@ object DemucsVoicePipeline {
                 }
             }
 
-            // 6. Conservar la voz original en mono.
+            // 7. GUARDAR DIAGNÓSTICO.
+            // Se guardan las pistas antes de aplicar filtros.
+            onProgress?.invoke(
+                77,
+                "Guardando pistas de diagnóstico"
+            )
+
+            saveDiagnosticTracks(
+                context = appContext,
+                vocals = vocalStereo,
+                instruments = mix
+            )
+
+            checkNotInterrupted()
+
+            // 8. Conservar la voz original en mono.
             onProgress?.invoke(78, "Preparando voz para limpieza")
 
             val vocalMono44100 = ShortArray(frameCount)
 
             for (frame in 0 until frameCount) {
+
                 val left = vocalStereo[frame * 2].toInt()
                 val right = vocalStereo[frame * 2 + 1].toInt()
 
@@ -202,7 +228,7 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            // 7. Remuestrear a 48 kHz.
+            // 9. Remuestrear a 48 kHz.
             val vocalMono48000 = resample(
                 vocalMono44100,
                 OUTPUT_RATE,
@@ -211,7 +237,7 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            // 8. Limpieza neuronal reforzada.
+            // 10. Limpieza neuronal de la voz.
             onProgress?.invoke(82, "Limpiando ruido de la voz")
 
             val cleaned48000 = DeepFilterVoiceCleaner.clean(
@@ -222,7 +248,7 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            // 9. Regresar a 44.1 kHz.
+            // 11. Regresar a 44.1 kHz.
             onProgress?.invoke(90, "Preparando mezcla final")
 
             val cleaned44100 = resample(
@@ -231,7 +257,7 @@ object DemucsVoicePipeline {
                 OUTPUT_RATE
             )
 
-            // 10. Mezclar voz original y voz limpia.
+            // 12. Mezclar voz original y voz limpia.
             onProgress?.invoke(94, "Protegiendo la voz original")
 
             val output = ShortArray(mix.size)
@@ -270,6 +296,190 @@ object DemucsVoicePipeline {
         }
     }
 
+    /**
+     * Guarda voz e instrumentos en Descargas/I-A-M-Diagnostico.
+     * Requiere Android 10 o superior para esta ubicación.
+     */
+    private fun saveDiagnosticTracks(
+        context: Context,
+        vocals: ShortArray,
+        instruments: FloatArray
+    ) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            Log.w(TAG, "Diagnóstico en Descargas requiere Android 10 o superior.")
+            return
+        }
+
+        val stamp = System.currentTimeMillis()
+
+        try {
+            saveDiagnosticWav(
+                context,
+                "IAM_VOZ_$stamp.wav"
+            ) { output ->
+                writePcm16StereoWav(output, vocals)
+            }
+
+            saveDiagnosticWav(
+                context,
+                "IAM_INSTRUMENTOS_$stamp.wav"
+            ) { output ->
+                writeFloatStereoWav(output, instruments)
+            }
+
+            Log.i(
+                TAG,
+                "Pistas de diagnóstico guardadas correctamente."
+            )
+
+        } catch (e: Exception) {
+            Log.e(
+                TAG,
+                "No se pudieron guardar las pistas de diagnóstico.",
+                e
+            )
+        }
+    }
+
+    private fun saveDiagnosticWav(
+        context: Context,
+        displayName: String,
+        writer: (OutputStream) -> Unit
+    ) {
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+            put(MediaStore.MediaColumns.MIME_TYPE, "audio/wav")
+            put(
+                MediaStore.MediaColumns.RELATIVE_PATH,
+                Environment.DIRECTORY_DOWNLOADS +
+                    "/I-A-M-Diagnostico"
+            )
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+
+        val resolver = context.contentResolver
+
+        val uri = resolver.insert(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            values
+        ) ?: throw IllegalStateException(
+            "No se pudo crear el archivo $displayName"
+        )
+
+        try {
+            val output = resolver.openOutputStream(uri, "w")
+                ?: throw IllegalStateException(
+                    "No se pudo abrir $displayName"
+                )
+
+            output.use {
+                writer(it)
+                it.flush()
+            }
+
+            val completed = ContentValues().apply {
+                put(MediaStore.MediaColumns.IS_PENDING, 0)
+            }
+
+            resolver.update(uri, completed, null, null)
+
+        } catch (e: Exception) {
+            resolver.delete(uri, null, null)
+            throw e
+        }
+    }
+
+    private fun writePcm16StereoWav(
+        output: OutputStream,
+        samples: ShortArray
+    ) {
+        writeWavHeader(output, samples.size * 2)
+
+        val buffer = ByteBuffer
+            .allocate(64 * 1024)
+            .order(ByteOrder.LITTLE_ENDIAN)
+
+        for (sample in samples) {
+
+            if (buffer.remaining() < 2) {
+                output.write(
+                    buffer.array(),
+                    0,
+                    buffer.position()
+                )
+                buffer.clear()
+            }
+
+            buffer.putShort(sample)
+        }
+
+        if (buffer.position() > 0) {
+            output.write(
+                buffer.array(),
+                0,
+                buffer.position()
+            )
+        }
+    }
+
+    private fun writeFloatStereoWav(
+        output: OutputStream,
+        samples: FloatArray
+    ) {
+        writeWavHeader(output, samples.size * 2)
+
+        val buffer = ByteBuffer
+            .allocate(64 * 1024)
+            .order(ByteOrder.LITTLE_ENDIAN)
+
+        for (sample in samples) {
+
+            if (buffer.remaining() < 2) {
+                output.write(
+                    buffer.array(),
+                    0,
+                    buffer.position()
+                )
+                buffer.clear()
+            }
+
+            buffer.putShort(toPcm16(sample))
+        }
+
+        if (buffer.position() > 0) {
+            output.write(
+                buffer.array(),
+                0,
+                buffer.position()
+            )
+        }
+    }
+
+    private fun writeWavHeader(
+        output: OutputStream,
+        dataSize: Int
+    ) {
+        val header = ByteBuffer
+            .allocate(44)
+            .order(ByteOrder.LITTLE_ENDIAN)
+
+        header.put("RIFF".toByteArray(Charsets.US_ASCII))
+        header.putInt(36 + dataSize)
+        header.put("WAVE".toByteArray(Charsets.US_ASCII))
+        header.put("fmt ".toByteArray(Charsets.US_ASCII))
+        header.putInt(16)
+        header.putShort(1.toShort())
+        header.putShort(2.toShort())
+        header.putInt(OUTPUT_RATE)
+        header.putInt(OUTPUT_RATE * 2 * 2)
+        header.putShort(4.toShort())
+        header.putShort(16.toShort())
+        header.put("data".toByteArray(Charsets.US_ASCII))
+        header.putInt(dataSize)
+
+        output.write(header.array())
+    }
+
     private fun writeFloat32File(
         file: File,
         samples: ShortArray
@@ -281,6 +491,7 @@ object DemucsVoicePipeline {
         FileOutputStream(file).use { output ->
 
             for (sample in samples) {
+
                 if (buffer.remaining() < 4) {
                     output.write(
                         buffer.array(),
