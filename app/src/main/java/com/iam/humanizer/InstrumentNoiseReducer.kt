@@ -2,15 +2,17 @@
 package com.iam.humanizer
 
 import kotlin.math.PI
+import kotlin.math.ceil
 import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * I-A-M - INSTRUMENT NOISE REDUCER 1.0
+ * I-A-M - INSTRUMENT NOISE REDUCER 2.0
  *
- * Reducción espectral suave de estática en instrumentos.
- * Conserva la fase y protege los componentes musicales.
+ * Procesamiento espectral por bloques de aproximadamente 4 segundos.
+ * Reduce memoria temporal y conserva la fase del audio.
  *
  * Entrada: FloatArray estéreo intercalado, 44.1 kHz.
  * No procesa la voz.
@@ -22,8 +24,9 @@ object InstrumentNoiseReducer {
     private const val NOISE_PERCENT = 0.08f
     private const val NOISE_MULTIPLIER = 2.2f
     private const val MIN_GAIN = 0.55f
-    private const val DEFAULT_STRENGTH = 0.45f
+    private const val DEFAULT_STRENGTH = 0.30f
     private const val MIN_FREQUENCY = 2800f
+    private const val CHUNK_SECONDS = 4
 
     private val window = FloatArray(FFT_SIZE) { i ->
         (0.5 - 0.5 * cos(
@@ -62,10 +65,13 @@ object InstrumentNoiseReducer {
         val frameCount =
             (sampleCount + HOP_SIZE - 1) / HOP_SIZE + 1
 
+        // Solo guarda una medida pequeña por bloque.
         val frameEnergy = FloatArray(frameCount)
 
-        // 1. Medir energía de cada bloque.
+        // 1. Analizar energía de los bloques.
         for (frame in 0 until frameCount) {
+
+            checkNotInterrupted()
 
             val start = frame * HOP_SIZE - FFT_SIZE / 2
             var sum = 0.0
@@ -99,7 +105,7 @@ object InstrumentNoiseReducer {
             .sortedBy { frameEnergy[it] }
             .take(selectedCount)
 
-        // 3. Calcular perfil espectral de ruido.
+        // 3. Crear perfil de ruido.
         val bins = FFT_SIZE / 2 + 1
         val noiseProfile = FloatArray(bins)
 
@@ -107,6 +113,8 @@ object InstrumentNoiseReducer {
         val imaginary = DoubleArray(FFT_SIZE)
 
         for (frame in selectedFrames) {
+
+            checkNotInterrupted()
 
             val start = frame * HOP_SIZE - FFT_SIZE / 2
 
@@ -146,7 +154,7 @@ object InstrumentNoiseReducer {
             noiseProfile[bin] /= divisor
         }
 
-        // Suavizar el perfil para evitar artefactos musicales.
+        // Suavizar el perfil de ruido.
         val smoothNoise = FloatArray(bins)
 
         for (bin in 0 until bins) {
@@ -165,160 +173,187 @@ object InstrumentNoiseReducer {
             smoothNoise[bin] = sum / count
         }
 
-        // 4. Procesar los instrumentos.
-        val outputLeft = FloatArray(sampleCount)
-        val outputRight = FloatArray(sampleCount)
-        val weights = FloatArray(sampleCount)
+        // Una sola matriz grande de salida.
+        // Ya no se crean matrices completas para L, R y pesos.
+        val output = FloatArray(input.size)
+
+        val rawGain = FloatArray(bins)
+        val smoothedGain = FloatArray(bins)
 
         val minimumBin = (
             MIN_FREQUENCY / sampleRate * FFT_SIZE
         ).toInt().coerceIn(1, bins - 1)
 
-        for (frame in 0 until frameCount) {
+        // Cantidad de tramas que se procesan por grupo.
+        val framesPerChunk = (
+            sampleRate * CHUNK_SECONDS / HOP_SIZE
+        ).coerceAtLeast(1)
 
-            val start = frame * HOP_SIZE - FFT_SIZE / 2
+        // 4. Procesamiento por bloques.
+        var chunkStart = 0
 
-            // Peso de solapamiento.
-            for (i in 0 until FFT_SIZE) {
-                val position = start + i
+        while (chunkStart < frameCount) {
 
-                if (position in 0 until sampleCount) {
-                    weights[position] += window[i] * window[i]
-                }
-            }
+            checkNotInterrupted()
 
-            for (channel in 0..1) {
+            val chunkEnd = minOf(
+                chunkStart + framesPerChunk,
+                frameCount
+            )
 
-                real.fill(0.0)
-                imaginary.fill(0.0)
+            for (frame in chunkStart until chunkEnd) {
 
-                for (i in 0 until FFT_SIZE) {
-                    val position = start + i
-
-                    val sample = if (
-                        position in 0 until sampleCount
-                    ) {
-                        input[position * 2 + channel].toDouble()
-                    } else {
-                        0.0
-                    }
-
-                    real[i] = sample * window[i]
+                if (frame % 32 == 0) {
+                    checkNotInterrupted()
                 }
 
-                fft(real, imaginary, false)
+                val start = frame * HOP_SIZE - FFT_SIZE / 2
 
-                val rawGain = FloatArray(bins)
+                for (channel in 0..1) {
 
-                for (bin in 0 until bins) {
+                    real.fill(0.0)
+                    imaginary.fill(0.0)
 
-                    if (bin < minimumBin) {
-                        rawGain[bin] = 1f
-                        continue
+                    // Ventana de análisis.
+                    for (i in 0 until FFT_SIZE) {
+                        val position = start + i
+
+                        val sample = if (
+                            position in 0 until sampleCount
+                        ) {
+                            input[position * 2 + channel].toDouble()
+                        } else {
+                            0.0
+                        }
+
+                        real[i] = sample * window[i]
                     }
 
-                    val magnitude = sqrt(
-                        real[bin] * real[bin] +
-                        imaginary[bin] * imaginary[bin]
-                    ).toFloat()
+                    fft(real, imaginary, false)
 
-                    val noise = smoothNoise[bin]
+                    // Calcular ganancias espectrales.
+                    for (bin in 0 until bins) {
 
-                    if (noise < 0.000001f) {
-                        rawGain[bin] = 1f
-                        continue
+                        if (bin < minimumBin) {
+                            rawGain[bin] = 1f
+                            continue
+                        }
+
+                        val magnitude = sqrt(
+                            real[bin] * real[bin] +
+                            imaginary[bin] * imaginary[bin]
+                        ).toFloat()
+
+                        val noise = smoothNoise[bin]
+
+                        if (noise < 0.000001f) {
+                            rawGain[bin] = 1f
+                            continue
+                        }
+
+                        val threshold = noise * NOISE_MULTIPLIER
+
+                        val noiseAmount = (
+                            1f - magnitude / threshold
+                        ).coerceIn(0f, 1f)
+
+                        rawGain[bin] = (
+                            1f - safeStrength * noiseAmount
+                        ).coerceAtLeast(MIN_GAIN)
                     }
 
-                    val threshold = noise * NOISE_MULTIPLIER
+                    // Suavizar ganancias entre frecuencias.
+                    for (bin in 0 until bins) {
 
-                    val noiseAmount = (
-                        1f - magnitude / threshold
-                    ).coerceIn(0f, 1f)
+                        var sum = 0f
+                        var count = 0
 
-                    val desiredGain = (
-                        1f - safeStrength * noiseAmount
-                    ).coerceAtLeast(MIN_GAIN)
+                        for (offset in -2..2) {
+                            val index = bin + offset
 
-                    rawGain[bin] = desiredGain
-                }
+                            if (index in 0 until bins) {
+                                sum += rawGain[index]
+                                count++
+                            }
+                        }
 
-                // Suavizado entre frecuencias.
-                val smoothedGain = FloatArray(bins)
+                        smoothedGain[bin] = sum / count
+                    }
 
-                for (bin in 0 until bins) {
-                    var sum = 0f
-                    var count = 0
+                    // Aplicar ganancia conservando la fase.
+                    for (bin in 0 until bins) {
 
-                    for (offset in -2..2) {
-                        val index = bin + offset
+                        val gain = smoothedGain[bin].toDouble()
 
-                        if (index in 0 until bins) {
-                            sum += rawGain[index]
-                            count++
+                        real[bin] *= gain
+                        imaginary[bin] *= gain
+
+                        if (bin > 0 && bin < FFT_SIZE / 2) {
+                            val mirror = FFT_SIZE - bin
+
+                            real[mirror] *= gain
+                            imaginary[mirror] *= gain
                         }
                     }
 
-                    smoothedGain[bin] = sum / count
-                }
+                    fft(real, imaginary, true)
 
-                // Aplicar ganancia conservando la fase.
-                for (bin in 0 until bins) {
+                    // Reconstruir directamente en la salida.
+                    for (i in 0 until FFT_SIZE) {
 
-                    val gain = smoothedGain[bin]
+                        val position = start + i
 
-                    real[bin] *= gain.toDouble()
-                    imaginary[bin] *= gain.toDouble()
+                        if (position in 0 until sampleCount) {
 
-                    if (bin > 0 && bin < FFT_SIZE / 2) {
-                        val mirror = FFT_SIZE - bin
+                            val index = position * 2 + channel
 
-                        real[mirror] *= gain.toDouble()
-                        imaginary[mirror] *= gain.toDouble()
-                    }
-                }
-
-                fft(real, imaginary, true)
-
-                val destination = if (channel == 0) {
-                    outputLeft
-                } else {
-                    outputRight
-                }
-
-                // Reconstrucción por solapamiento.
-                for (i in 0 until FFT_SIZE) {
-                    val position = start + i
-
-                    if (position in 0 until sampleCount) {
-                        destination[position] += (
-                            real[i].toFloat() * window[i]
-                        )
+                            output[index] +=
+                                real[i].toFloat() * window[i]
+                        }
                     }
                 }
             }
+
+            chunkStart = chunkEnd
         }
 
-        // 5. Normalizar y reconstruir estéreo.
-        val output = FloatArray(input.size)
+        // 5. Normalizar el solapamiento sin otra matriz gigante.
+        for (position in 0 until sampleCount) {
 
-        for (i in 0 until sampleCount) {
-
-            val weight = weights[i]
-
-            val left = if (weight > 0.000001f) {
-                outputLeft[i] / weight
-            } else {
-                input[i * 2]
+            if (position % 32768 == 0) {
+                checkNotInterrupted()
             }
 
-            val right = if (weight > 0.000001f) {
-                outputRight[i] / weight
-            } else {
-                input[i * 2 + 1]
+            val centerFrame = (
+                (position + FFT_SIZE / 2) / HOP_SIZE
+            )
+
+            var weight = 0f
+
+            val firstFrame = maxOf(0, centerFrame - 2)
+            val lastFrame = minOf(frameCount - 1, centerFrame)
+
+            for (frame in firstFrame..lastFrame) {
+
+                val start = frame * HOP_SIZE - FFT_SIZE / 2
+                val windowIndex = position - start
+
+                if (windowIndex in 0 until FFT_SIZE) {
+                    val value = window[windowIndex]
+                    weight += value * value
+                }
             }
 
-            output[i * 2] = left
-            output[i * 2 + 1] = right
+            val leftIndex = position * 2
+            val rightIndex = leftIndex + 1
+
+            if (weight > 0.000001f) {
+                output[leftIndex] /= weight
+                output[rightIndex] /= weight
+            } else {
+                output[leftIndex] = input[leftIndex]
+                output[rightIndex] = input[rightIndex]
+            }
         }
 
         return output
@@ -418,6 +453,14 @@ object InstrumentNoiseReducer {
                 real[i] *= scale
                 imaginary[i] *= scale
             }
+        }
+    }
+
+    private fun checkNotInterrupted() {
+        if (Thread.currentThread().isInterrupted) {
+            throw InterruptedException(
+                "Procesamiento cancelado."
+            )
         }
     }
 }
