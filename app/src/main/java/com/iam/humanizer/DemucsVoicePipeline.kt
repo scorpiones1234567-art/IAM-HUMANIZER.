@@ -11,12 +11,11 @@ import java.nio.ByteOrder
 import kotlin.math.floor
 
 /**
- * I-A-M - DEMUCS VOICE PIPELINE 2.1
+ * I-A-M - DEMUCS VOICE PIPELINE 2.2
  *
  * Separa voz e instrumentos.
- * Limpia suavemente la voz.
- * Conserva parte de la voz original para evitar
- * que desaparezcan sílabas y finales de palabras.
+ * Limpia la voz con DeepFilterNet.
+ * Protege la voz mediante una mezcla controlada.
  *
  * Entrada: PCM 16 bits, mono o estéreo.
  * Salida: PCM 16 bits, estéreo, 44.1 kHz.
@@ -26,12 +25,12 @@ object DemucsVoicePipeline {
     private const val OUTPUT_RATE = 44100
     private const val CLEAN_RATE = 48000
 
-    // Limpieza menos agresiva.
-    private const val DEFAULT_ATTENUATION_DB = 15f
+    // Limpieza neuronal reforzada.
+    private const val DEFAULT_ATTENUATION_DB = 20f
 
-    // Mezcla vocal: 65% original + 35% limpia.
-    private const val ORIGINAL_VOICE_MIX = 0.65f
-    private const val CLEANED_VOICE_MIX = 0.35f
+    // Mezcla vocal: 35% original + 65% limpia.
+    private const val ORIGINAL_VOICE_MIX = 0.35f
+    private const val CLEANED_VOICE_MIX = 0.65f
 
     fun process(
         context: Context,
@@ -212,7 +211,7 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            // 8. Limpieza neuronal suave.
+            // 8. Limpieza neuronal reforzada.
             onProgress?.invoke(82, "Limpiando ruido de la voz")
 
             val cleaned48000 = DeepFilterVoiceCleaner.clean(
@@ -239,7 +238,8 @@ object DemucsVoicePipeline {
 
             for (frame in 0 until frameCount) {
 
-                val original = vocalMono44100[frame].toFloat() / 32768f
+                val original =
+                    vocalMono44100[frame].toFloat() / 32768f
 
                 val cleaned = if (frame < cleaned44100.size) {
                     cleaned44100[frame].toFloat() / 32768f
@@ -282,7 +282,11 @@ object DemucsVoicePipeline {
 
             for (sample in samples) {
                 if (buffer.remaining() < 4) {
-                    output.write(buffer.array(), 0, buffer.position())
+                    output.write(
+                        buffer.array(),
+                        0,
+                        buffer.position()
+                    )
                     buffer.clear()
                 }
 
@@ -290,7 +294,11 @@ object DemucsVoicePipeline {
             }
 
             if (buffer.position() > 0) {
-                output.write(buffer.array(), 0, buffer.position())
+                output.write(
+                    buffer.array(),
+                    0,
+                    buffer.position()
+                )
             }
 
             output.flush()
