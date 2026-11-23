@@ -1,17 +1,23 @@
-
 package com.iam.humanizer
 
+import android.util.Log
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.log10
 import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * I-A-M - INSTRUMENT NOISE REDUCER 2.1
+ * I-A-M - INSTRUMENT NOISE REDUCER 2.2
  *
  * Reducción espectral conservadora.
  * Suaviza las ganancias entre tramas para evitar
  * artefactos, sonido metálico y cambios bruscos.
+ *
+ * Cambios 2.2:
+ * - Se quitó el tope de fuerza que anulaba la reducción.
+ * - El perfil de ruido ignora el silencio digital.
+ * - Registra en Logcat (IAM_NOISE) la reducción media real.
  *
  * Entrada: FloatArray estéreo intercalado.
  * No procesa directamente la pista vocal.
@@ -24,14 +30,16 @@ object InstrumentNoiseReducer {
     private const val NOISE_PERCENT = 0.08f
     private const val NOISE_MULTIPLIER = 2.8f
 
-    private const val MIN_GAIN = 0.78f
-    private const val DEFAULT_STRENGTH = 0.15f
+    private const val MIN_GAIN = 0.5f
+    private const val DEFAULT_STRENGTH = 0.30f
 
     private const val MIN_FREQUENCY = 4000f
     private const val CHUNK_SECONDS = 4
 
     private const val ATTACK_SMOOTHING = 0.35f
     private const val RELEASE_SMOOTHING = 0.08f
+
+    private const val TAG = "IAM_NOISE"
 
     private val window = FloatArray(FFT_SIZE) { i ->
         (
@@ -63,7 +71,7 @@ object InstrumentNoiseReducer {
             return input.copyOf()
         }
 
-        val safeStrength = strength.coerceIn(0f, 0.15f)
+        val safeStrength = strength.coerceIn(0f, 0.5f)
 
         if (safeStrength <= 0f) {
             return input.copyOf()
@@ -105,12 +113,22 @@ object InstrumentNoiseReducer {
             }
         }
 
+        // Ignorar tramas casi en silencio digital
+        // (inicio o final de la canción).
+        val candidates = frameEnergy.indices.filter {
+            frameEnergy[it] > 0.0001f
+        }
+
+        if (candidates.size < 8) {
+            return input.copyOf()
+        }
+
         // Seleccionar las tramas de menor energía.
         val selectedCount = (
-            frameCount * NOISE_PERCENT
-        ).toInt().coerceAtLeast(8).coerceAtMost(frameCount)
+            candidates.size * NOISE_PERCENT
+        ).toInt().coerceIn(8, candidates.size)
 
-        val selectedFrames = frameEnergy.indices
+        val selectedFrames = candidates
             .sortedBy { frameEnergy[it] }
             .take(selectedCount)
 
@@ -204,6 +222,10 @@ object InstrumentNoiseReducer {
         val framesPerChunk = (
             sampleRate * CHUNK_SECONDS / HOP_SIZE
         ).coerceAtLeast(1)
+
+        // Medidor de la reducción real aplicada.
+        var gainSum = 0.0
+        var gainCount = 0L
 
         // Procesamiento espectral por bloques.
         var chunkStart = 0
@@ -318,6 +340,12 @@ object InstrumentNoiseReducer {
                         previousGain[channel][bin] = stable
                     }
 
+                    // Medir la ganancia aplicada (solo agudos).
+                    for (bin in minimumBin until bins) {
+                        gainSum += smoothedGain[bin]
+                        gainCount++
+                    }
+
                     // Aplicar ganancia conservando la fase.
                     for (bin in 0 until bins) {
 
@@ -397,6 +425,19 @@ object InstrumentNoiseReducer {
                 output[leftIndex] = input[leftIndex]
                 output[rightIndex] = input[rightIndex]
             }
+        }
+
+        // Mostrar la reducción media real en Logcat.
+        if (gainCount > 0L) {
+
+            val meanGain = gainSum / gainCount
+            val db = 20.0 * log10(meanGain.coerceAtLeast(0.000001))
+
+            Log.i(
+                TAG,
+                "Reducción media en agudos: " +
+                    "${"%.2f".format(db)} dB"
+            )
         }
 
         return output
