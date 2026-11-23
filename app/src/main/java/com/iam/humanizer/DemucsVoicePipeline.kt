@@ -39,7 +39,8 @@ object DemucsVoicePipeline {
     // 10^(-10/20) = 0.31622777.
     private const val MASTER_OUTPUT_GAIN = 0.31622777f
 
-    private const val INSTRUMENT_NOISE_STRENGTH = 0.30f
+    // Fuerza de la reducción de estática instrumental (máximo 0.50).
+    private const val INSTRUMENT_NOISE_STRENGTH = 0.45f
 
     private const val FILTER_RESERVED_MEMORY =
         160L * 1024L * 1024L
