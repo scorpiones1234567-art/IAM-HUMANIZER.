@@ -13,6 +13,7 @@ import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.abs
 import kotlin.math.floor
 
 /**
@@ -22,7 +23,7 @@ import kotlin.math.floor
  * Limpia la voz con DeepFilterNet.
  * Reduce suavemente la estática instrumental cuando hay memoria.
  * Conserva el 90 % de la voz original y el 10 % de la voz procesada.
- * Aplica -10 dB de ganancia a la mezcla final.
+ * Normaliza la mezcla final a un pico de -1 dBFS (volumen normal).
  */
 object DemucsVoicePipeline {
 
@@ -35,9 +36,13 @@ object DemucsVoicePipeline {
     private const val ORIGINAL_VOICE_MIX = 0.90f
     private const val CLEANED_VOICE_MIX = 0.10f
 
-    // ATENUACIÓN GENERAL DE SALIDA: -10 dB.
-    // 10^(-10/20) = 0.31622777.
-    private const val MASTER_OUTPUT_GAIN = 0.31622777f
+    // VOLUMEN DE SALIDA: se normaliza el pico de la mezcla a -1 dBFS.
+    // 10^(-1/20) = 0.89125094. Súbelo hasta 0.97f para más volumen
+    // o bájalo (por ejemplo 0.70f) si la quieres más baja.
+    private const val TARGET_PEAK = 0.89125094f
+
+    // Máximo que se puede amplificar una canción muy baja (+12 dB).
+    private const val MAX_OUTPUT_GAIN = 4.0f
 
     // Fuerza de la reducción de estática instrumental (máximo 0.50).
     private const val INSTRUMENT_NOISE_STRENGTH = 0.45f
@@ -408,10 +413,11 @@ object DemucsVoicePipeline {
                 "Protegiendo voz y mezclando instrumentos"
             )
 
-            val output = ShortArray(cleanedInstruments.size)
-
             val conversionRatio =
                 CLEAN_RATE.toDouble() / OUTPUT_RATE.toDouble()
+
+            // Pico máximo de la mezcla (antes de ajustar el volumen).
+            var peak = 0f
 
             for (frame in 0 until frameCount) {
 
@@ -454,9 +460,42 @@ object DemucsVoicePipeline {
                 val right =
                     cleanedInstruments[rightIndex] + protectedVoice
 
-                // La atenuación se aplica después de sumar voz e instrumentos.
-                output[leftIndex] = toPcm16(left * MASTER_OUTPUT_GAIN)
-                output[rightIndex] = toPcm16(right * MASTER_OUTPUT_GAIN)
+                // Se guarda la mezcla en el mismo arreglo (sin memoria extra).
+                cleanedInstruments[leftIndex] = left
+                cleanedInstruments[rightIndex] = right
+
+                val leftPeak = abs(left)
+                val rightPeak = abs(right)
+
+                if (leftPeak > peak) peak = leftPeak
+                if (rightPeak > peak) peak = rightPeak
+            }
+
+            checkNotInterrupted()
+
+            // Ajustar el volumen: pico final de -1 dBFS.
+            val outputGain = if (peak > 0.0001f) {
+                (TARGET_PEAK / peak).coerceAtMost(MAX_OUTPUT_GAIN)
+            } else {
+                1f
+            }
+
+            Log.i(
+                TAG,
+                "Pico de la mezcla: $peak. Ganancia de salida: $outputGain."
+            )
+
+            val output = ShortArray(cleanedInstruments.size)
+
+            for (index in output.indices) {
+
+                if (index % 65536 == 0) {
+                    checkNotInterrupted()
+                }
+
+                output[index] = toPcm16(
+                    cleanedInstruments[index] * outputGain
+                )
             }
 
             checkNotInterrupted()
@@ -471,7 +510,7 @@ object DemucsVoicePipeline {
             Log.i(
                 TAG,
                 "Pipeline terminado. Filtro instrumental: $filterApplied. " +
-                    "Voz original: 90 %. Voz IA: 10 %. Salida: -10 dB."
+                    "Voz original: 90 %. Voz IA: 10 %. Pico de salida: -1 dBFS."
             )
 
             return output
