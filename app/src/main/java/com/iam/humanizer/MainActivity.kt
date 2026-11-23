@@ -1,4 +1,4 @@
-package com.iam.humanizer
+9package com.iam.humanizer
 
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -905,7 +905,7 @@ class MainActivity : ComponentActivity() {
             return AudioStats(-120f, -120f, 0f, 0f, 0f)
         }
 
-        val stride = max(1, totalFrames / 300000)
+        val stride = 1
         val lowAlpha = 1.0 - exp(-2.0 * PI * 250.0 / sampleRate)
         val highAlpha = 1.0 - exp(-2.0 * PI * 4000.0 / sampleRate)
 
