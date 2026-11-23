@@ -100,7 +100,13 @@ class MainActivity : ComponentActivity() {
         "Heavy Metal" to floatArrayOf(3f,2f,1f,-1f,1f,2f,3f,2f,1f,2f),
         "Clásica" to floatArrayOf(2f,1f,0f,0f,0f,1f,1f,2f,2f,2f),
         "K-pop · Voz" to floatArrayOf(-2f,-1f,0f,1f,1f,2f,3f,3f,2f,2f),
-        "Cumbia · Voz" to floatArrayOf(1f,2f,1f,0f,1f,2f,3f,2f,1f,0f)
+                "Cumbia · Voz" to floatArrayOf(1f,2f,1f,0f,1f,2f,3f,2f,1f,0f),
+        "Cumbia" to floatArrayOf(1f,2f,2f,1f,0f,1f,1f,2f,2f,0f),
+        "Reggaetón" to floatArrayOf(4f,4f,2f,0f,-2f,-1f,1f,2f,2f,1f),
+        "Bachata" to floatArrayOf(0f,1f,1f,0f,-1f,0f,2f,3f,2f,1f),
+        "Baladas" to floatArrayOf(0f,1f,2f,1f,0f,1f,1f,0f,1f,1f),
+        "Electrónica" to floatArrayOf(3f,4f,1f,-1f,-1f,0f,1f,2f,3f,2f),
+        "Menos siseo" to floatArrayOf(0f,0f,0f,0f,0f,0f,0f,0f,-2f,-3f)
     )
 
     private data class Decoded(
