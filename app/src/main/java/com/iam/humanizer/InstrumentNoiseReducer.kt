@@ -459,6 +459,23 @@ object InstrumentNoiseReducer {
     }
 
     /**
+     * Aplica solo el filtro de agudos contra el siseo.
+     * No necesita memoria extra: se usa cuando el reductor
+     * completo se omite por falta de memoria o por un error.
+     */
+    fun softenHiss(
+        data: FloatArray,
+        sampleRate: Int
+    ) {
+        applyHighShelf(
+            data = data,
+            sampleRate = sampleRate,
+            frequency = HISS_SHELF_FREQ,
+            gainDb = HISS_SHELF_DB
+        )
+    }
+
+    /**
      * Filtro high-shelf (biquad RBJ) sobre audio estéreo intercalado.
      * gainDb negativo = baja las frecuencias por encima de "frequency".
      */
