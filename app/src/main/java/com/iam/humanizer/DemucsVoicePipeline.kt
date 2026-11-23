@@ -1,4 +1,3 @@
-
 package com.iam.humanizer
 
 import android.content.ContentValues
@@ -17,12 +16,13 @@ import java.nio.ByteOrder
 import kotlin.math.floor
 
 /**
- * I-A-M - DEMUCS VOICE PIPELINE 2.7
+ * I-A-M - DEMUCS VOICE PIPELINE 2.8
  *
  * Separa voz e instrumentos.
  * Limpia la voz con DeepFilterNet.
  * Reduce suavemente la estática instrumental cuando hay memoria.
- * Conserva el 70 % de la voz original y el 30 % de la voz procesada.
+ * Conserva el 90 % de la voz original y el 10 % de la voz procesada.
+ * Aplica -10 dB de ganancia a la mezcla final.
  */
 object DemucsVoicePipeline {
 
@@ -31,9 +31,13 @@ object DemucsVoicePipeline {
 
     private const val DEFAULT_ATTENUATION_DB = 20f
 
-    // MEZCLA VOCAL: 70 % ORIGINAL + 30 % IA.
-    private const val ORIGINAL_VOICE_MIX = 0.70f
-    private const val CLEANED_VOICE_MIX = 0.30f
+    // MEZCLA VOCAL: 90 % ORIGINAL + 10 % IA.
+    private const val ORIGINAL_VOICE_MIX = 0.90f
+    private const val CLEANED_VOICE_MIX = 0.10f
+
+    // ATENUACIÓN GENERAL DE SALIDA: -10 dB.
+    // 10^(-10/20) = 0.31622777.
+    private const val MASTER_OUTPUT_GAIN = 0.31622777f
 
     private const val INSTRUMENT_NOISE_STRENGTH = 0.30f
 
@@ -409,7 +413,7 @@ object DemucsVoicePipeline {
                 val cleaned =
                     (cleanedSample / 32768.0).toFloat()
 
-                // 70 % voz original + 30 % voz procesada por IA.
+                // 90 % voz original + 10 % voz procesada por IA.
                 val protectedVoice =
                     original * ORIGINAL_VOICE_MIX +
                     cleaned * CLEANED_VOICE_MIX
@@ -423,8 +427,9 @@ object DemucsVoicePipeline {
                 val right =
                     cleanedInstruments[rightIndex] + protectedVoice
 
-                output[leftIndex] = toPcm16(left)
-                output[rightIndex] = toPcm16(right)
+                // La atenuación se aplica después de sumar voz e instrumentos.
+                output[leftIndex] = toPcm16(left * MASTER_OUTPUT_GAIN)
+                output[rightIndex] = toPcm16(right * MASTER_OUTPUT_GAIN)
             }
 
             checkNotInterrupted()
@@ -439,7 +444,7 @@ object DemucsVoicePipeline {
             Log.i(
                 TAG,
                 "Pipeline terminado. Filtro instrumental: $filterApplied. " +
-                    "Voz original: 70 %. Voz IA: 30 %."
+                    "Voz original: 90 %. Voz IA: 10 %. Salida: -10 dB."
             )
 
             return output
