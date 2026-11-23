@@ -44,7 +44,7 @@ object InstrumentNoiseReducer {
     // Ajusta HISS_SHELF_DB entre -2 (suave) y -6 (fuerte).
     // Pon 0f para desactivarlo.
     private const val HISS_SHELF_FREQ = 9000f
-    private const val HISS_SHELF_DB = -4f
+    private const val HISS_SHELF_DB = -6f
 
     private const val TAG = "IAM_NOISE"
 
