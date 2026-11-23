@@ -8,7 +8,7 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * I-A-M - INSTRUMENT NOISE REDUCER 2.2
+ * I-A-M - INSTRUMENT NOISE REDUCER 2.3
  *
  * Reducción espectral conservadora.
  * Suaviza las ganancias entre tramas para evitar
@@ -18,6 +18,7 @@ import kotlin.math.sqrt
  * - Se quitó el tope de fuerza que anulaba la reducción.
  * - El perfil de ruido ignora el silencio digital.
  * - Registra en Logcat (IAM_NOISE) la reducción media real.
+ * - 2.3: filtro suave de agudos (high-shelf) contra el siseo.
  *
  * Entrada: FloatArray estéreo intercalado.
  * No procesa directamente la pista vocal.
@@ -28,16 +29,22 @@ object InstrumentNoiseReducer {
     private const val HOP_SIZE = 512
 
     private const val NOISE_PERCENT = 0.08f
-    private const val NOISE_MULTIPLIER = 2.8f
+    private const val NOISE_MULTIPLIER = 4.0f
 
     private const val MIN_GAIN = 0.5f
     private const val DEFAULT_STRENGTH = 0.30f
 
-    private const val MIN_FREQUENCY = 4000f
+    private const val MIN_FREQUENCY = 3000f
     private const val CHUNK_SECONDS = 4
 
     private const val ATTACK_SMOOTHING = 0.35f
     private const val RELEASE_SMOOTHING = 0.08f
+
+    // Filtro de agudos contra el siseo.
+    // Ajusta HISS_SHELF_DB entre -2 (suave) y -6 (fuerte).
+    // Pon 0f para desactivarlo.
+    private const val HISS_SHELF_FREQ = 9000f
+    private const val HISS_SHELF_DB = -4f
 
     private const val TAG = "IAM_NOISE"
 
@@ -427,6 +434,14 @@ object InstrumentNoiseReducer {
             }
         }
 
+        // Bajar suavemente los agudos para reducir el siseo.
+        applyHighShelf(
+            data = output,
+            sampleRate = sampleRate,
+            frequency = HISS_SHELF_FREQ,
+            gainDb = HISS_SHELF_DB
+        )
+
         // Mostrar la reducción media real en Logcat.
         if (gainCount > 0L) {
 
@@ -441,6 +456,78 @@ object InstrumentNoiseReducer {
         }
 
         return output
+    }
+
+    /**
+     * Filtro high-shelf (biquad RBJ) sobre audio estéreo intercalado.
+     * gainDb negativo = baja las frecuencias por encima de "frequency".
+     */
+    private fun applyHighShelf(
+        data: FloatArray,
+        sampleRate: Int,
+        frequency: Float,
+        gainDb: Float
+    ) {
+
+        if (gainDb == 0f) return
+
+        if (frequency >= sampleRate / 2.0 * 0.95) return
+
+        val a = Math.pow(10.0, gainDb / 40.0)
+        val w0 = 2.0 * PI * frequency / sampleRate
+
+        val cosW = cos(w0)
+        val sinW = sin(w0)
+
+        val alpha = sinW / 2.0 * sqrt(2.0)
+        val sqrtA = sqrt(a)
+
+        val b0 = a * ((a + 1) + (a - 1) * cosW + 2 * sqrtA * alpha)
+        val b1 = -2 * a * ((a - 1) + (a + 1) * cosW)
+        val b2 = a * ((a + 1) + (a - 1) * cosW - 2 * sqrtA * alpha)
+
+        val a0 = (a + 1) - (a - 1) * cosW + 2 * sqrtA * alpha
+        val a1 = 2 * ((a - 1) - (a + 1) * cosW)
+        val a2 = (a + 1) - (a - 1) * cosW - 2 * sqrtA * alpha
+
+        val nb0 = b0 / a0
+        val nb1 = b1 / a0
+        val nb2 = b2 / a0
+        val na1 = a1 / a0
+        val na2 = a2 / a0
+
+        for (channel in 0..1) {
+
+            var x1 = 0.0
+            var x2 = 0.0
+            var y1 = 0.0
+            var y2 = 0.0
+
+            var index = channel
+            var count = 0
+
+            while (index < data.size) {
+
+                if (count % 32768 == 0) {
+                    checkNotInterrupted()
+                }
+
+                val x0 = data[index].toDouble()
+
+                val y0 = nb0 * x0 + nb1 * x1 + nb2 * x2 -
+                    na1 * y1 - na2 * y2
+
+                x2 = x1
+                x1 = x0
+                y2 = y1
+                y1 = y0
+
+                data[index] = y0.toFloat()
+
+                index += 2
+                count++
+            }
+        }
     }
 
     /**
