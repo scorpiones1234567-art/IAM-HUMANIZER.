@@ -17,21 +17,12 @@ import java.nio.ByteOrder
 import kotlin.math.floor
 
 /**
- * I-A-M - DEMUCS VOICE PIPELINE 2.6
+ * I-A-M - DEMUCS VOICE PIPELINE 2.7
  *
  * Separa voz e instrumentos.
  * Limpia la voz con DeepFilterNet.
  * Reduce suavemente la estática instrumental cuando hay memoria.
- * Conserva parte de la voz original para evitar fluctuaciones.
- *
- * Optimizaciones:
- * - Lee los instrumentos directamente desde los WAV por bloques.
- * - Evita crear cinco ShortArray adicionales.
- * - Evita crear una pista vocal adicional a 44.1 kHz.
- * - Convierte de 48 kHz durante la mezcla final.
- * - Comprueba memoria antes del filtro instrumental.
- * - Libera referencias temporales tan pronto como es posible.
- * - Comprueba las pistas y tamaños antes de mezclarlas.
+ * Conserva el 70 % de la voz original y el 30 % de la voz procesada.
  */
 object DemucsVoicePipeline {
 
@@ -40,12 +31,12 @@ object DemucsVoicePipeline {
 
     private const val DEFAULT_ATTENUATION_DB = 20f
 
-    private const val ORIGINAL_VOICE_MIX = 0.35f
-    private const val CLEANED_VOICE_MIX = 0.65f
+    // MEZCLA VOCAL: 70 % ORIGINAL + 30 % IA.
+    private const val ORIGINAL_VOICE_MIX = 0.70f
+    private const val CLEANED_VOICE_MIX = 0.30f
 
     private const val INSTRUMENT_NOISE_STRENGTH = 0.30f
 
-    // Margen adicional para el filtro instrumental.
     private const val FILTER_RESERVED_MEMORY =
         160L * 1024L * 1024L
 
@@ -100,14 +91,11 @@ object DemucsVoicePipeline {
                 "No se pudo crear la carpeta de pistas."
             }
 
-            // 1. Preparar audio.
             onProgress?.invoke(2, "Preparando canción")
-
             writeFloat32File(rawFile, input)
 
             checkNotInterrupted()
 
-            // 2. Cargar modelo Demucs.
             onProgress?.invoke(5, "Comprobando modelo Demucs")
 
             val model = DemucsModelManager.getModel(appContext) { percent ->
@@ -123,7 +111,6 @@ object DemucsVoicePipeline {
 
             NativeEngine.loadModel(model.absolutePath)
 
-            // 3. Preparar audio.
             onProgress?.invoke(
                 20,
                 "Preparando audio para separación"
@@ -138,7 +125,6 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            // 4. Separar voz e instrumentos.
             onProgress?.invoke(
                 25,
                 "Separando voz e instrumentos"
@@ -167,11 +153,7 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            // 5. Leer únicamente la voz completa.
-            onProgress?.invoke(
-                72,
-                "Leyendo pista vocal"
-            )
+            onProgress?.invoke(72, "Leyendo pista vocal")
 
             var vocalStereo = readPcm16StereoWav(
                 File(stemsDir, "vocals.wav")
@@ -183,9 +165,6 @@ object DemucsVoicePipeline {
                 "La pista vocal está vacía."
             }
 
-            // 6. Preparar mezcla instrumental.
-            // Cada pista se lee directamente desde el disco
-            // en bloques pequeños.
             onProgress?.invoke(
                 74,
                 "Mezclando instrumentos por bloques"
@@ -219,7 +198,6 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            // 7. Guardar diagnósticos originales.
             onProgress?.invoke(
                 76,
                 "Guardando diagnóstico original"
@@ -233,7 +211,6 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            // 8. Reducción instrumental con margen de memoria.
             onProgress?.invoke(
                 78,
                 "Comprobando memoria para limpiar instrumentos"
@@ -308,13 +285,10 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            // Liberar la referencia original si el filtro
-            // generó una pista nueva.
             if (cleanedInstruments !== mix) {
                 mix = FloatArray(0)
             }
 
-            // 9. Guardar diagnóstico instrumental.
             onProgress?.invoke(
                 80,
                 if (filterApplied) {
@@ -331,7 +305,6 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            // 10. Convertir voz estéreo a mono.
             onProgress?.invoke(
                 81,
                 "Preparando voz para limpieza"
@@ -354,12 +327,10 @@ object DemucsVoicePipeline {
                         .toShort()
             }
 
-            // La pista estéreo ya no se necesita.
             vocalStereo = ShortArray(0)
 
             checkNotInterrupted()
 
-            // 11. Remuestrear a 48 kHz.
             onProgress?.invoke(
                 83,
                 "Preparando frecuencia vocal"
@@ -373,7 +344,6 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            // 12. Limpieza neuronal.
             onProgress?.invoke(
                 85,
                 "Limpiando ruido de la voz"
@@ -385,7 +355,6 @@ object DemucsVoicePipeline {
                 attenuationDb = attenuationDb.coerceIn(5f, 25f)
             )
 
-            // Liberar entrada de DeepFilterNet.
             vocalMono48000 = ShortArray(0)
 
             check(cleaned48000.isNotEmpty()) {
@@ -394,9 +363,6 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            // 13. Mezclar sin crear cleaned44100.
-            // La conversión 48 kHz -> 44.1 kHz se realiza
-            // directamente mientras se genera la salida.
             onProgress?.invoke(
                 91,
                 "Preparando mezcla final"
@@ -425,7 +391,6 @@ object DemucsVoicePipeline {
                 val original =
                     vocalMono44100[frame].toFloat() / 32768f
 
-                // Interpolación directa de 48 kHz a 44.1 kHz.
                 val position = frame * conversionRatio
 
                 val first = floor(position)
@@ -444,7 +409,7 @@ object DemucsVoicePipeline {
                 val cleaned =
                     (cleanedSample / 32768.0).toFloat()
 
-                // Protege la voz original.
+                // 70 % voz original + 30 % voz procesada por IA.
                 val protectedVoice =
                     original * ORIGINAL_VOICE_MIX +
                     cleaned * CLEANED_VOICE_MIX
@@ -464,7 +429,6 @@ object DemucsVoicePipeline {
 
             checkNotInterrupted()
 
-            // Liberar la referencia a la voz procesada.
             cleaned48000 = ShortArray(0)
 
             onProgress?.invoke(
@@ -474,13 +438,13 @@ object DemucsVoicePipeline {
 
             Log.i(
                 TAG,
-                "Pipeline terminado. Filtro instrumental: $filterApplied"
+                "Pipeline terminado. Filtro instrumental: $filterApplied. " +
+                    "Voz original: 70 %. Voz IA: 30 %."
             )
 
             return output
 
         } finally {
-            // Los archivos temporales se eliminan al terminar.
             try {
                 workDir.deleteRecursively()
             } catch (error: Exception) {
@@ -892,7 +856,6 @@ object DemucsVoicePipeline {
                     channels = readUnsignedShortLE(raf)
                     sampleRate = readUnsignedIntLE(raf)
 
-                    // byteRate, blockAlign y bitsPerSample.
                     raf.skipBytes(6)
                     bits = readUnsignedShortLE(raf)
                 }
