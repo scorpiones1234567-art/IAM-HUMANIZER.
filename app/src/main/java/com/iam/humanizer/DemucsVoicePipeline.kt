@@ -288,6 +288,32 @@ object DemucsVoicePipeline {
                 )
             }
 
+            // Si el reductor completo no corrió, aplicar al menos
+            // el filtro de agudos (no usa memoria extra).
+            if (!filterApplied) {
+
+                try {
+                    InstrumentNoiseReducer.softenHiss(
+                        data = cleanedInstruments,
+                        sampleRate = OUTPUT_RATE
+                    )
+
+                    Log.i(
+                        TAG,
+                        "Filtro de agudos aplicado sin reductor completo."
+                    )
+
+                } catch (error: InterruptedException) {
+                    throw error
+                } catch (error: Exception) {
+                    Log.e(
+                        TAG,
+                        "Falló el filtro de agudos.",
+                        error
+                    )
+                }
+            }
+
             checkNotInterrupted()
 
             if (cleanedInstruments !== mix) {
@@ -299,7 +325,7 @@ object DemucsVoicePipeline {
                 if (filterApplied) {
                     "Guardando instrumentos procesados"
                 } else {
-                    "Conservando instrumentos originales"
+                    "Filtrando agudos (sin limpieza completa)"
                 }
             )
 
