@@ -275,6 +275,13 @@ class MainActivity : ComponentActivity() {
         }
         content.addView(selectButton, params())
 
+                val libraryButton = Button(this).apply {
+            text = "♪  MI MÚSICA"
+            buttonStyle(this, 0xFF168A9D.toInt())
+            setOnClickListener { openLibrary() }
+        }
+        content.addView(libraryButton, params())
+
         addSection(content, "ECUALIZADOR DE 10 BANDAS")
 
         content.addView(label(
