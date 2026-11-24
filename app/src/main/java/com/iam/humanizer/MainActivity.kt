@@ -1028,14 +1028,7 @@ class MainActivity : ComponentActivity() {
                 if (pendingProcessedAudio == null) {
                     message("No hay audio preparado.")
                 } else {
-                    saveMp3Picker.launch(
-                        makeExportFileName(
-                            exportNameInput.text.toString(), "mp3"
-                        )
-                    )
-                }
-            }
-        }
+                                        saveMp3ToFolder()
         content.addView(mp3Button, params())
 
         content.addView(label(
