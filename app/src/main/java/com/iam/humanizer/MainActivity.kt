@@ -1010,7 +1010,7 @@ class MainActivity : ComponentActivity() {
             "Elige el formato para guardar tu canción.", 14f
         ))
 
-        val wavButton = Button(this).apply {
+                val wavButton = Button(this).apply {
             text = "↓  EXPORTAR WAV"
             buttonStyle(this, 0xFF8C3FC7.toInt())
             setOnClickListener {
@@ -1018,7 +1018,10 @@ class MainActivity : ComponentActivity() {
                 if (samples == null) {
                     message("No hay audio preparado.")
                 } else {
-                                        saveWavToFolder()
+                    saveWavToFolder()
+                }
+            }
+        }
         content.addView(wavButton, params())
 
         val mp3Button = Button(this).apply {
@@ -1028,7 +1031,10 @@ class MainActivity : ComponentActivity() {
                 if (pendingProcessedAudio == null) {
                     message("No hay audio preparado.")
                 } else {
-                                        saveMp3ToFolder()
+                    saveMp3ToFolder()
+                }
+            }
+        }
         content.addView(mp3Button, params())
 
         content.addView(label(
