@@ -2041,6 +2041,169 @@ private fun decode(uri: Uri): Decoded {
         }.start()
     }
 
+    // GUARDAR AUTOMÁTICAMENTE EN MÚSICA/I-A-M
+    // (Android 10 o superior; en uno más viejo se usa el selector de siempre)
+
+    private fun saveWavToFolder() {
+
+        val samples = pendingProcessedAudio ?: return
+
+        val sr = pendingExportRate
+        val ch = pendingExportChannels
+        val cover = pendingCoverJpeg
+
+        val rawName = exportNameInput.text.toString()
+        val name = makeExportFileName(rawName, "wav")
+        val coverName = makeCoverFileName(rawName)
+
+        if (android.os.Build.VERSION.SDK_INT < 29) {
+            saveWavPicker.launch(name)
+            return
+        }
+
+        progress.visibility = View.VISIBLE
+        progress.isIndeterminate = true
+
+        Thread {
+            try {
+
+                val data = wav(samples, sr, ch)
+
+                val saved = MusicLibrary.saveAudioToIamFolder(
+                    applicationContext,
+                    name,
+                    "audio/x-wav"
+                ) { output ->
+                    output.write(data)
+                }
+
+                if (saved == null) {
+                    throw Exception("No se pudo guardar el WAV.")
+                }
+
+                if (cover != null) {
+                    MusicLibrary.saveCoverToIamFolder(
+                        applicationContext,
+                        coverName,
+                        cover
+                    )
+                }
+
+                handler.post {
+
+                    progress.visibility = View.GONE
+
+                    message(
+                        if (cover != null) {
+                            "WAV guardado en Música/I-A-M. " +
+                                "La carátula está en Imágenes/I-A-M."
+                        } else {
+                            "WAV guardado en Música/I-A-M."
+                        }
+                    )
+
+                    finishExport()
+                }
+
+            } catch (e: Exception) {
+
+                handler.post {
+
+                    progress.visibility = View.GONE
+
+                    message(
+                        e.message ?: "Error guardando WAV."
+                    )
+                }
+            }
+        }.start()
+    }
+
+    private fun saveMp3ToFolder() {
+
+        val samples = pendingProcessedAudio ?: return
+
+        val sr = pendingExportRate
+        val ch = pendingExportChannels
+        val cover = pendingCoverJpeg
+
+        val name = makeExportFileName(
+            exportNameInput.text.toString(),
+            "mp3"
+        )
+
+        if (android.os.Build.VERSION.SDK_INT < 29) {
+            saveMp3Picker.launch(name)
+            return
+        }
+
+        val title = name.removeSuffix(".mp3")
+
+        pendingExportTitle = title
+
+        progress.visibility = View.VISIBLE
+        progress.isIndeterminate = true
+
+        message("I-A-M está creando el MP3. Espera un momento.")
+
+        Thread {
+            var tempFile: File? = null
+
+            try {
+
+                val generatedFile = Mp3Exporter.export(
+                    this@MainActivity,
+                    samples,
+                    sr,
+                    ch,
+                    title,
+                    cover
+                )
+
+                tempFile = generatedFile
+
+                val saved = MusicLibrary.saveAudioToIamFolder(
+                    applicationContext,
+                    name,
+                    "audio/mpeg"
+                ) { output ->
+                    generatedFile.inputStream().use { input ->
+                        input.copyTo(output)
+                    }
+                }
+
+                if (saved == null) {
+                    throw Exception("No se pudo guardar el MP3.")
+                }
+
+                generatedFile.delete()
+                tempFile = null
+
+                handler.post {
+
+                    progress.visibility = View.GONE
+
+                    message("¡MP3 guardado en Música/I-A-M!")
+
+                    finishExport()
+                }
+
+            } catch (e: Exception) {
+
+                tempFile?.delete()
+
+                handler.post {
+
+                    progress.visibility = View.GONE
+
+                    message(
+                        e.message ?: "Error creando el MP3."
+                    )
+                }
+            }
+        }.start()
+    }
+    
     // GUARDAR WAV
 
     private fun saveWav(uri: Uri) {
