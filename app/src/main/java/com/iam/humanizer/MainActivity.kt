@@ -148,6 +148,18 @@ class MainActivity : ComponentActivity() {
             if (it != null) saveCover(it)
         }
 
+            private val libraryPermissionPicker =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                showLibraryPage()
+            } else {
+                message(
+                    "Sin permiso no puedo mostrar tu música. " +
+                        "Puedes usar SELECCIONAR CANCIÓN."
+                )
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
