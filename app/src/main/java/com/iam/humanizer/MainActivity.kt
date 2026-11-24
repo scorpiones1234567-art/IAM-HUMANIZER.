@@ -623,6 +623,261 @@ class MainActivity : ComponentActivity() {
         setContentView(mainScreen)
     }
 
+    // MI MÚSICA: TODA LA MÚSICA DEL TELÉFONO
+
+    private var libraryTracks: List<MusicLibrary.Track> = emptyList()
+
+    private val audioPermissionName: String
+        get() = if (android.os.Build.VERSION.SDK_INT >= 33) {
+            "android.permission.READ_MEDIA_AUDIO"
+        } else {
+            "android.permission.READ_EXTERNAL_STORAGE"
+        }
+
+    private fun openLibrary() {
+
+        val granted =
+            checkSelfPermission(audioPermissionName) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        if (granted) {
+            showLibraryPage()
+        } else {
+            libraryPermissionPicker.launch(audioPermissionName)
+        }
+    }
+
+    private fun showLibraryPage() {
+
+        val page = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(24), dp(16), dp(16))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(
+                    0xFF100923.toInt(),
+                    0xFF35105C.toInt(),
+                    0xFF10172D.toInt()
+                )
+            )
+        }
+
+        page.addView(label("MI MÚSICA", 22f).apply {
+            setTextColor(cyan)
+            paint.isFakeBoldText = true
+        })
+
+        var onlyIam = false
+        var shown: List<MusicLibrary.Track> = emptyList()
+
+        val allTab = Button(this).apply { text = "TODAS" }
+        val iamTab = Button(this).apply { text = "I-A-M" }
+
+        val tabs = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        tabs.addView(
+            allTab,
+            LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f
+            ).apply {
+                marginEnd = dp(6)
+            }
+        )
+
+        tabs.addView(
+            iamTab,
+            LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f
+            )
+        )
+
+        page.addView(tabs, params())
+
+        val searchInput = EditText(this).apply {
+            setSingleLine(true)
+            textSize = 16f
+            setTextColor(white)
+            setHintTextColor(0xFFBBA9D8.toInt())
+            hint = "Buscar canción o artista"
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            background = GradientDrawable().apply {
+                setColor(0xFF281A43.toInt())
+                cornerRadius = dp(14).toFloat()
+                setStroke(dp(1), purple)
+            }
+        }
+        page.addView(searchInput, params())
+
+        val countText = label("", 12f).apply {
+            setTextColor(gold)
+        }
+        page.addView(countText)
+
+        val songAdapter = object : ArrayAdapter<String>(
+            this@MainActivity,
+            android.R.layout.simple_list_item_1,
+            ArrayList<String>()
+        ) {
+            override fun getView(
+                position: Int,
+                convertView: View?,
+                parent: ViewGroup
+            ): View {
+                val view = super.getView(position, convertView, parent)
+                (view as TextView).apply {
+                    setTextColor(white)
+                    textSize = 15f
+                    setPadding(dp(8), dp(10), dp(8), dp(10))
+                }
+                return view
+            }
+        }
+
+        val listView = ListView(this).apply {
+            this.adapter = songAdapter
+            divider = android.graphics.drawable.ColorDrawable(0x33FFFFFF)
+            dividerHeight = dp(1)
+        }
+
+        fun refresh() {
+
+            val text = searchInput.text.toString().trim().lowercase()
+
+            shown = if (text.isEmpty()) {
+                libraryTracks
+            } else {
+                libraryTracks.filter {
+                    it.title.lowercase().contains(text) ||
+                        it.artist.lowercase().contains(text)
+                }
+            }
+
+            songAdapter.clear()
+            songAdapter.addAll(shown.map { it.label })
+            songAdapter.notifyDataSetChanged()
+
+            countText.text = when {
+                libraryTracks.isEmpty() && onlyIam ->
+                    "Aún no has exportado canciones. " +
+                        "Tus descargas aparecerán aquí."
+
+                libraryTracks.isEmpty() ->
+                    "No se encontró música en el teléfono."
+
+                else -> "${shown.size} canciones"
+            }
+        }
+
+        fun paintTabs() {
+            buttonStyle(
+                allTab,
+                if (onlyIam) 0xFF553B70.toInt() else 0xFF7438D9.toInt()
+            )
+            buttonStyle(
+                iamTab,
+                if (onlyIam) 0xFF7438D9.toInt() else 0xFF553B70.toInt()
+            )
+        }
+
+        fun loadTracks() {
+
+            countText.text = "Cargando música..."
+
+            val onlyFolder = onlyIam
+
+            Thread {
+
+                val tracks = MusicLibrary.query(
+                    applicationContext,
+                    onlyFolder
+                )
+
+                handler.post {
+
+                    if (isFinishing || isDestroyed) return@post
+                    if (onlyFolder != onlyIam) return@post
+
+                    libraryTracks = tracks
+                    refresh()
+                }
+            }.start()
+        }
+
+        allTab.setOnClickListener {
+            if (onlyIam) {
+                onlyIam = false
+                paintTabs()
+                loadTracks()
+            }
+        }
+
+        iamTab.setOnClickListener {
+            if (!onlyIam) {
+                onlyIam = true
+                paintTabs()
+                loadTracks()
+            }
+        }
+
+        searchInput.addTextChangedListener(
+            object : android.text.TextWatcher {
+                override fun beforeTextChanged(
+                    s: CharSequence?, start: Int, count: Int, after: Int
+                ) {}
+
+                override fun onTextChanged(
+                    s: CharSequence?, start: Int, before: Int, count: Int
+                ) {
+                    refresh()
+                }
+
+                override fun afterTextChanged(s: android.text.Editable?) {}
+            }
+        )
+
+        listView.setOnItemClickListener { _, _, position, _ ->
+
+            val track = shown.getOrNull(position)
+
+            if (track != null) {
+                setContentView(mainScreen)
+                status.text = "Cargando: ${track.title}"
+                loadAudio(track.uri)
+            }
+        }
+
+        page.addView(
+            listView,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            ).apply {
+                bottomMargin = dp(9)
+            }
+        )
+
+        val backButton = Button(this).apply {
+            text = "←  REGRESAR"
+            buttonStyle(this, 0xFF553B70.toInt())
+            setOnClickListener {
+                setContentView(mainScreen)
+            }
+        }
+        page.addView(backButton, params())
+
+        setContentView(page)
+
+        paintTabs()
+        loadTracks()
+    }
+    
     // PANTALLA DE EXPORTACIÓN
 
     private fun showExportPage() {
