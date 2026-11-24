@@ -8,7 +8,7 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * I-A-M - INSTRUMENT NOISE REDUCER 2.3
+ * I-A-M - INSTRUMENT NOISE REDUCER 2.4
  *
  * Reducción espectral conservadora.
  * Suaviza las ganancias entre tramas para evitar
@@ -18,7 +18,9 @@ import kotlin.math.sqrt
  * - Se quitó el tope de fuerza que anulaba la reducción.
  * - El perfil de ruido ignora el silencio digital.
  * - Registra en Logcat (IAM_NOISE) la reducción media real.
- * - 2.3: filtro suave de agudos (high-shelf) contra el siseo.
+ * - 2.3: filtro suave de agudos contra el siseo.
+ * - 2.4: el filtro ahora es un recorte localizado (campana) en la
+ *        zona donde está el siseo, en vez de bajar todos los agudos.
  *
  * Entrada: FloatArray estéreo intercalado.
  * No procesa directamente la pista vocal.
@@ -40,11 +42,13 @@ object InstrumentNoiseReducer {
     private const val ATTACK_SMOOTHING = 0.35f
     private const val RELEASE_SMOOTHING = 0.08f
 
-    // Filtro de agudos contra el siseo.
-    // Ajusta HISS_SHELF_DB entre -2 (suave) y -6 (fuerte).
-    // Pon 0f para desactivarlo.
-    private const val HISS_SHELF_FREQ = 9000f
-    private const val HISS_SHELF_DB = -6f
+    // Recorte localizado contra el siseo (filtro de campana).
+    // HISS_CUT_FREQ: centro del siseo. En la canción analizada está en 9-10 kHz.
+    // HISS_CUT_DB: fuerza, entre -3 (suave) y -8 (fuerte). Pon 0f para apagarlo.
+    // HISS_CUT_Q: ancho. Más alto = más angosto (0.8 ancho, 2.0 angosto).
+    private const val HISS_CUT_FREQ = 9500f
+    private const val HISS_CUT_DB = -6f
+    private const val HISS_CUT_Q = 1.0f
 
     private const val TAG = "IAM_NOISE"
 
@@ -435,11 +439,12 @@ object InstrumentNoiseReducer {
         }
 
         // Bajar suavemente los agudos para reducir el siseo.
-        applyHighShelf(
+        applyHissCut(
             data = output,
             sampleRate = sampleRate,
-            frequency = HISS_SHELF_FREQ,
-            gainDb = HISS_SHELF_DB
+            frequency = HISS_CUT_FREQ,
+            gainDb = HISS_CUT_DB,
+            q = HISS_CUT_Q
         )
 
         // Mostrar la reducción media real en Logcat.
@@ -467,23 +472,25 @@ object InstrumentNoiseReducer {
         data: FloatArray,
         sampleRate: Int
     ) {
-        applyHighShelf(
+        applyHissCut(
             data = data,
             sampleRate = sampleRate,
-            frequency = HISS_SHELF_FREQ,
-            gainDb = HISS_SHELF_DB
+            frequency = HISS_CUT_FREQ,
+            gainDb = HISS_CUT_DB,
+            q = HISS_CUT_Q
         )
     }
 
     /**
-     * Filtro high-shelf (biquad RBJ) sobre audio estéreo intercalado.
-     * gainDb negativo = baja las frecuencias por encima de "frequency".
+     * Filtro de campana (peaking, biquad RBJ) sobre audio estéreo intercalado.
+     * gainDb negativo = baja las frecuencias alrededor de "frequency".
      */
-    private fun applyHighShelf(
+    private fun applyHissCut(
         data: FloatArray,
         sampleRate: Int,
         frequency: Float,
-        gainDb: Float
+        gainDb: Float,
+        q: Float
     ) {
 
         if (gainDb == 0f) return
@@ -496,16 +503,15 @@ object InstrumentNoiseReducer {
         val cosW = cos(w0)
         val sinW = sin(w0)
 
-        val alpha = sinW / 2.0 * sqrt(2.0)
-        val sqrtA = sqrt(a)
+        val alpha = sinW / (2.0 * q.coerceAtLeast(0.1f))
 
-        val b0 = a * ((a + 1) + (a - 1) * cosW + 2 * sqrtA * alpha)
-        val b1 = -2 * a * ((a - 1) + (a + 1) * cosW)
-        val b2 = a * ((a + 1) + (a - 1) * cosW - 2 * sqrtA * alpha)
+        val b0 = 1.0 + alpha * a
+        val b1 = -2.0 * cosW
+        val b2 = 1.0 - alpha * a
 
-        val a0 = (a + 1) - (a - 1) * cosW + 2 * sqrtA * alpha
-        val a1 = 2 * ((a - 1) - (a + 1) * cosW)
-        val a2 = (a + 1) - (a - 1) * cosW - 2 * sqrtA * alpha
+        val a0 = 1.0 + alpha / a
+        val a1 = -2.0 * cosW
+        val a2 = 1.0 - alpha / a
 
         val nb0 = b0 / a0
         val nb1 = b1 / a0
