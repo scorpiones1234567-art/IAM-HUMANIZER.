@@ -1018,14 +1018,7 @@ class MainActivity : ComponentActivity() {
                 if (samples == null) {
                     message("No hay audio preparado.")
                 } else {
-                    saveWavPicker.launch(
-                        makeExportFileName(
-                            exportNameInput.text.toString(), "wav"
-                        )
-                    )
-                }
-            }
-        }
+                                        saveWavToFolder()
         content.addView(wavButton, params())
 
         val mp3Button = Button(this).apply {
