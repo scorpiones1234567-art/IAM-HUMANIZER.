@@ -39,7 +39,7 @@ object DemucsVoicePipeline {
     // VOLUMEN DE SALIDA: se normaliza el pico de la mezcla a -1 dBFS.
     // 10^(-1/20) = 0.89125094. Súbelo hasta 0.97f para más volumen
     // o bájalo (por ejemplo 0.70f) si la quieres más baja.
-    private const val TARGET_PEAK = 0.89125094f
+    private const val TARGET_PEAK = 0.50f
 
     // Máximo que se puede amplificar una canción muy baja (+12 dB).
     private const val MAX_OUTPUT_GAIN = 4.0f
